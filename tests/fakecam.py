@@ -6,6 +6,7 @@ from TrackMix / Duo 2 / RLC-811A / NVR firmware as documented by reolink_aio).
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -65,6 +66,9 @@ class FakeCamera:
         self.ir = "Auto"
         self.spot = {"state": 0, "bright": 70, "mode": 1}
         self.expire_next = False
+        self.rtsp_auth = "digest"
+        self.rtsp_requests: list[tuple[str, str]] = []
+        self.rtsp_enabled = 1
         self.lock = threading.Lock()
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.http.daemon_threads = True
@@ -160,7 +164,7 @@ class FakeCamera:
         if cmd == "GetNetPort":
             return ok({"NetPort": {"httpEnable": 1, "httpPort": 80, "httpsEnable": 1, "httpsPort": 443,
                                    "mediaPort": 9000, "onvifEnable": 1, "onvifPort": 8000, "rtmpEnable": 1,
-                                   "rtmpPort": 1935, "rtspEnable": 1, "rtspPort": self.rtsp_port}})
+                                   "rtmpPort": 1935, "rtspEnable": self.rtsp_enabled, "rtspPort": self.rtsp_port}})
         if cmd == "GetLocalLink":
             return ok({"LocalLink": {"mac": "ec:71:db:12:34:56"}})
         if cmd == "GetP2p":
@@ -296,8 +300,14 @@ class _RtspServer(socketserver.ThreadingTCPServer):
 
 
 class _RtspHandler(socketserver.StreamRequestHandler):
+    """Answers DESCRIBE. ``cam.rtsp_auth`` picks the camera behaviour to imitate:
+    "digest" (RFC 2069, Digest then Basic challenges), "qop" (RFC 2617 qop=auth + opaque,
+    Digest only), "basic" (Basic only), "close" (like "digest" but hangs up after the
+    challenge) and "reject" (never accepts the credentials)."""
+
     def handle(self):
         srv: _RtspServer = self.server
+        mode = srv.cam.rtsp_auth
         while True:
             lines = []
             while True:
@@ -314,26 +324,53 @@ class _RtspHandler(socketserver.StreamRequestHandler):
             cseq = headers.get("cseq", "1")
             auth = headers.get("authorization", "")
             path = urllib.parse.urlsplit(uri).path
+            srv.cam.rtsp_requests.append((path, auth.split(" ", 1)[0] if auth else ""))
             if not auth:
-                self.wfile.write((f"RTSP/1.0 401 Unauthorized\r\nCSeq: {cseq}\r\nWWW-Authenticate: Digest "
-                                  f'realm="{srv.realm}", nonce="{srv.nonce}"\r\n'
-                                  f'WWW-Authenticate: Basic realm="{srv.realm}"\r\n\r\n').encode())
+                if mode == "basic":
+                    challenge = f'WWW-Authenticate: Basic realm="{srv.realm}"\r\n'
+                elif mode == "qop":
+                    challenge = (f'WWW-Authenticate: Digest realm="{srv.realm}", nonce="{srv.nonce}", '
+                                 f'qop="auth", opaque="opq42", algorithm=MD5\r\n')
+                else:
+                    challenge = (f'WWW-Authenticate: Digest realm="{srv.realm}", nonce="{srv.nonce}"\r\n'
+                                 f'WWW-Authenticate: Basic realm="{srv.realm}"\r\n')
+                self.wfile.write(f"RTSP/1.0 401 Unauthorized\r\nCSeq: {cseq}\r\n{challenge}\r\n".encode())
+                if mode == "close":
+                    return
                 continue
-            params = dict(re.findall(r'(\w+)="([^"]*)"', auth))
-            ha1 = hashlib.md5(f"{USER}:{srv.realm}:{srv.cam.password}".encode()).hexdigest()
-            ha2 = hashlib.md5(f"{method}:{params.get('uri', '')}".encode()).hexdigest()
-            good = params.get("response") == hashlib.md5(f"{ha1}:{srv.nonce}:{ha2}".encode()).hexdigest()
-            if not good:
+            if not self._authorized(method, auth, mode):
                 self.wfile.write(f"RTSP/1.0 401 Unauthorized\r\nCSeq: {cseq}\r\n\r\n".encode())
-                return
+                continue
             codec = srv.cam.rtsp_paths.get(path)
             if not codec:
                 self.wfile.write(f"RTSP/1.0 404 Not Found\r\nCSeq: {cseq}\r\n\r\n".encode())
-                return
+                continue
             sdp = (f"v=0\r\nm=video 0 RTP/AVP 96\r\na=rtpmap:96 {codec}/90000\r\n"
                    "m=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/16000\r\n")
             self.wfile.write((f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nContent-Type: application/sdp\r\n"
                               f"Content-Length: {len(sdp)}\r\n\r\n{sdp}").encode())
+
+    def _authorized(self, method: str, auth: str, mode: str) -> bool:
+        srv: _RtspServer = self.server
+        if mode == "reject":
+            return False
+        if auth.startswith("Basic "):
+            if mode == "qop":
+                return False
+            return base64.b64decode(auth[6:]).decode() == f"{USER}:{srv.cam.password}"
+        if mode == "basic":
+            return False
+        params = dict(re.findall(r'(\w+)="?([^",]*)"?', auth[7:]))
+        ha1 = hashlib.md5(f"{USER}:{srv.realm}:{srv.cam.password}".encode()).hexdigest()
+        ha2 = hashlib.md5(f"{method}:{params.get('uri', '')}".encode()).hexdigest()
+        if mode == "qop":
+            if params.get("opaque") != "opq42" or params.get("qop") != "auth":
+                return False
+            expected = hashlib.md5(f"{ha1}:{srv.nonce}:{params.get('nc')}:{params.get('cnonce')}:auth:{ha2}"
+                                   .encode()).hexdigest()
+        else:
+            expected = hashlib.md5(f"{ha1}:{srv.nonce}:{ha2}".encode()).hexdigest()
+        return params.get("response") == expected
 
 
 def free_port() -> int:

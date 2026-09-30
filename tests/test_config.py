@@ -43,3 +43,13 @@ def test_default_dirs_follow_xdg(tmp_path, monkeypatch):
     (conf / "user-dirs.dirs").write_text('XDG_VIDEOS_DIR="$HOME/Filme"\n')
     monkeypatch.setenv("XDG_CONFIG_HOME", str(conf))
     assert default_video_dir().parts[-2:] == ("Filme", "ReolinkLinux")
+
+
+def test_old_defaults_are_migrated(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text('{"version": 1, "settings": {"hwdec": "auto-safe", "grid_quality": "sub", "theme": "dark"}}')
+    cfg = Config(path)
+    assert cfg.settings.hwdec == "auto-copy-safe" and cfg.settings.grid_quality == "auto"
+    cfg.settings.grid_quality = "sub"                       # a later, deliberate choice sticks
+    cfg.save()
+    assert Config(path).settings.grid_quality == "sub"

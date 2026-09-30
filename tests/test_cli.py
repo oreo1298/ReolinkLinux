@@ -60,3 +60,12 @@ def test_list_saved_cameras(capsys):
     cfg.add(CameraConfig(name="Garden", host="10.0.0.5"), "pw")
     assert main(["list"]) == 0
     assert "Garden" in capsys.readouterr().out
+
+
+def test_diagnose_report_hides_secrets(trackmix, capsys):
+    trackmix.rtsp_auth = "reject"
+    assert main(args_for(trackmix) + ["diagnose", "--no-ffprobe"]) == 0
+    out = capsys.readouterr().out
+    assert "Reolink TrackMix PoE" in out and "[tele clear]" in out and "NOT confirmed" in out
+    assert "DESCRIBE h265Preview_01_main: 401" in out and "supportAutoTrackStream" in out
+    assert "s3cret" not in out and "token=tok" not in out

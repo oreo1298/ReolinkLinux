@@ -58,6 +58,7 @@ class CameraConfig:
     demo: str = ""                     # demo kind ("duo2", "trackmix", …) for simulated cameras
     hidden_channels: list[int] = field(default_factory=list)
     continuous_record: bool = False    # record the stream to disk whenever the app runs
+    software_decode: bool = False      # never use the GPU video decoder for this camera
 
     @property
     def label(self) -> str:
@@ -67,13 +68,14 @@ class CameraConfig:
 @dataclass
 class Settings:
     theme: str = "system"
-    grid_quality: str = "sub"          # stream shown in the multi-camera grid
+    grid_quality: str = "auto"         # grid stream: auto (Clear for up to 4 videos) | main | sub
     focus_quality: str = "main"        # stream shown when one camera is enlarged
     protocol: str = "rtsp"             # rtsp | flv
-    hwdec: str = "auto-safe"           # mpv --hwdec
+    hwdec: str = "auto-copy-safe"      # mpv --hwdec (copy-back: robust on every GPU setup)
     low_latency: bool = True
     grid_audio: bool = False           # play audio in the grid (otherwise only when enlarged)
     fill_tiles: bool = False           # crop video to fill tiles instead of letterboxing
+    both_lenses: bool = True           # show both lenses of TrackMix-style cameras in the grid
     video_dir: str = ""
     picture_dir: str = ""
     record_format: str = "mp4"         # mp4 | mkv
@@ -156,6 +158,19 @@ class _Keyring:
 keyring = _Keyring()
 
 
+CONFIG_VERSION = 2
+
+
+def _migrate(settings: dict) -> None:
+    """Move settings that were saved with an old default to the new default."""
+    # 1.0 used zero-copy hardware decoding, which garbles video on some GPU setups.
+    if settings.get("hwdec") == "auto-safe":
+        settings["hwdec"] = "auto-copy-safe"
+    # 1.0 always showed the grid in Fluent quality.
+    if settings.get("grid_quality") == "sub":
+        settings["grid_quality"] = "auto"
+
+
 class Config:
     def __init__(self, path: Path | None = None):
         self.path = path or config_dir() / "config.json"
@@ -170,7 +185,10 @@ class Config:
         except (OSError, ValueError):
             return
         known = {f for f in Settings.__dataclass_fields__}
-        self.settings = Settings(**{k: v for k, v in (data.get("settings") or {}).items() if k in known})
+        settings = {k: v for k, v in (data.get("settings") or {}).items() if k in known}
+        if int(data.get("version", 1) or 1) < CONFIG_VERSION:
+            _migrate(settings)
+        self.settings = Settings(**settings)
         cam_fields = {f for f in CameraConfig.__dataclass_fields__}
         self.cameras = [CameraConfig(**{k: v for k, v in c.items() if k in cam_fields})
                         for c in data.get("cameras", []) if isinstance(c, dict)]
@@ -179,7 +197,7 @@ class Config:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "version": 1,
+            "version": CONFIG_VERSION,
             "settings": asdict(self.settings),
             "cameras": [asdict(c) for c in self.cameras],
             "window": self.window,

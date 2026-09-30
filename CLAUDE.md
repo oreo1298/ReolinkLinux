@@ -34,6 +34,13 @@ PTZ, lights, SD-card playback and downloads, local recording (FFmpeg), plus the
   `Snap/Search channel=1`); behind an NVR/Home Hub it is the channel's autotrack stream
   (`Preview_0N_autotrack`, `channelN_autotrack_*.bcs`, `iLogicChannel: 1`). `Device._tele_forms`
   / `_tele_candidates` try the likely form first and fall back to the other.
+- Stream choice (`Device.probe_stream`): an unconfirmed RTSP URL beats FLV; FLV only for H.264
+  and only when RTSP is off / every path 404s. Reolink can't send H.265 over FLV. Probes run one
+  connection at a time per camera. `probe_log` feeds `core/diagnose.py` (`reolinkctl diagnose`,
+  Device tab → Diagnostics…) — ask users for that report when video misbehaves.
+- Default `hwdec` is `auto-copy-safe`: zero-copy interop garbled a real Duo 2 (coloured dots and
+  lines over the picture). Per-camera `software_decode` is the escape hatch. Config migrations live
+  in `config._migrate` (bump `CONFIG_VERSION`).
 - Credentials never go into logs or error text: see `_clean_error` / `_redact` / `_hide`.
 - The GUI shares the EZP2019Linux / FirmwareLab design system (`theme.py`, `icons.py`,
   `widgets.py`); keep it visually consistent with those apps.

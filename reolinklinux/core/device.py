@@ -14,6 +14,7 @@ import string
 import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Callable
 
 from . import rtsp
@@ -25,8 +26,20 @@ from .recordings import parse_file, status_days, to_reolink_time
 PTZ_DIRECTIONS = ("Left", "Right", "Up", "Down", "LeftUp", "LeftDown", "RightUp", "RightDown")
 PTZ_OPS = PTZ_DIRECTIONS + ("ZoomInc", "ZoomDec", "FocusInc", "FocusDec", "Auto", "Stop")
 
+# Model-name fragments of dual-lens tracking cameras (wide + telephoto streams).
+TELEPHOTO_MODELS = ("trackmix", "rlc-81ma", "rlc81ma")
+
 PROTOCOL_RTSP = "rtsp"
 PROTOCOL_FLV = "flv"
+
+
+@dataclass
+class ProbeRecord:
+    """How a stream URL was chosen (for the diagnostics report)."""
+
+    chosen: str
+    confirmed: bool
+    tried: list[tuple[str, rtsp.DescribeResult]]
 
 
 def _ver(abilities: dict, key: str, default: int = 0) -> int:
@@ -68,6 +81,7 @@ class Device:
         self.clock_read_at: dt.datetime | None = None
         self.connected = False
         self._stream_urls: dict[tuple[int, int, str, str], str] = {}
+        self.probe_log: dict[tuple[int, int, str], ProbeRecord] = {}
         self._codecs: dict[tuple[int, int, str], str] = {}
         self._lock = threading.Lock()
 
@@ -205,7 +219,7 @@ class Device:
                 add(ch, "GetIrLights")
             if not known or _ver(a, "floodLight") > 0 or _ver(a, "supportFLswitch") > 0:
                 add(ch, "GetWhiteLed")
-            if not self.is_nvr and _ver(a, "supportAutoTrackStream") > 0:
+            if not self.is_nvr and self._has_telephoto(ch, a):
                 # A TrackMix on its own serves the telephoto lens as stream channel 1.
                 tele = {"channel": ch.index + 1}
                 add(ch, "GetEnc", param=tele, tag="tele:GetEnc")
@@ -216,6 +230,14 @@ class Device:
             answered.setdefault(ch.index, {})[tag] = item
         for ch in channels:
             self._apply_channel(ch, answered.get(ch.index, {}), known)
+
+    def _has_telephoto(self, ch: Channel, abilities: dict) -> bool:
+        """Dual-lens tracking cameras (TrackMix family) have a second, telephoto stream.
+        Some firmware does not report the ability, so the model name counts too."""
+        if _ver(abilities, "supportAutoTrackStream") > 0:
+            return True
+        model = (ch.model or (self.info.model if not self.is_nvr else "")).lower().replace(" ", "")
+        return any(name in model for name in TELEPHOTO_MODELS)
 
     def _apply_channel(self, ch: Channel, r: dict[str, dict], known: bool) -> None:
         a = self._chn_abilities(ch.index)
@@ -283,7 +305,7 @@ class Device:
         if ok(r.get("GetAutoFocus", {})):
             caps.auto_focus = caps.focus
             ch.auto_focus_on = int(r["GetAutoFocus"]["value"].get("AutoFocus", {}).get("disable", 0)) == 0
-        caps.telephoto = _ver(a, "supportAutoTrackStream") > 0
+        caps.telephoto = self._has_telephoto(ch, a)
         if ok(r.get("GetIrLights", {})):
             caps.ir_lights = True
             ch.lights.ir_state = str(r["GetIrLights"]["value"].get("IrLights", {}).get("state", ""))
@@ -384,31 +406,44 @@ class Device:
         path = "/" + rest[1] if len(rest) > 1 else "/"
         return base + path
 
+    def expected_codec(self, index: int, lens: int, quality: str) -> str:
+        """The stream's codec: measured by the RTSP probe, else from GetEnc, else a guess."""
+        known = self._codecs.get((index, lens, quality))
+        if known:
+            return known
+        ch = self.channel(index)
+        if lens == TELE:
+            info = ch.tele_main if quality == MAIN else ch.tele_sub
+        else:
+            info = ch.main if quality == MAIN else ch.sub
+        if info.codec in ("h264", "h265"):
+            return info.codec
+        return "h265" if quality == MAIN and ch.caps.main_h265 else "h264"
+
     def stream_candidates(self, index: int, lens: int = WIDE, quality: str = MAIN,
                           protocol: str = PROTOCOL_RTSP) -> list[str]:
-        """Stream URLs to try, best guess first."""
+        """Stream URLs to try, best guess first.
+
+        FLV (HTTP) is only offered for H.264 streams: Reolink cannot send H.265 over FLV,
+        so the Clear stream of 4K cameras (Duo 2, TrackMix, RLC-8xx…) is RTSP only.
+        """
         ch = self.channel(index)
-        cc = f"{index + 1:02d}"
-        base = self._rtsp_base()
-        flv = [self._flv_url(f"channel{index}_{quality}.bcs")]
-        out: list[str] = []
         if lens == TELE:
-            return self._tele_candidates(ch, quality, protocol)
-        info = ch.main if quality == MAIN else ch.sub
-        enc = info.codec if info.codec in ("h264", "h265") else ("h265" if quality == MAIN and ch.caps.main_h265 else "h264")
-        other = "h264" if enc == "h265" else "h265"
-        reported = ch.rtsp_main if quality == MAIN else ch.rtsp_sub
-        if reported:
-            out.append(self._with_credentials(reported))
-        out += [f"{base}/{enc}Preview_{cc}_{quality}", f"{base}/Preview_{cc}_{quality}",
+            urls = self._tele_candidates(ch, quality, protocol)
+        else:
+            cc = f"{index + 1:02d}"
+            base = self._rtsp_base()
+            enc = self.expected_codec(index, lens, quality)
+            other = "h264" if enc == "h265" else "h265"
+            reported = ch.rtsp_main if quality == MAIN else ch.rtsp_sub
+            rtsp_urls = ([self._with_credentials(reported)] if reported else []) + [
+                f"{base}/{enc}Preview_{cc}_{quality}", f"{base}/Preview_{cc}_{quality}",
                 f"{base}/{other}Preview_{cc}_{quality}"]
-        seen: list[str] = []
-        for u in out:
-            if u not in seen:
-                seen.append(u)
-        if protocol == PROTOCOL_FLV and not (quality == MAIN and enc == "h265"):
-            return flv + seen
-        return seen + flv
+            flv = [self._flv_url(f"channel{index}_{quality}.bcs")]
+            urls = flv + rtsp_urls if protocol == PROTOCOL_FLV else rtsp_urls + flv
+        if self.expected_codec(index, lens, quality) == "h265":
+            urls = [u for u in urls if not u.startswith("http")]
+        return list(dict.fromkeys(urls))
 
     def _tele_candidates(self, ch: Channel, quality: str, protocol: str) -> list[str]:
         """Telephoto-lens streams. A TrackMix on its own serves them as the next channel
@@ -451,28 +486,45 @@ class Device:
         return self._codecs.get((index, lens, quality), "")
 
     def probe_stream(self, index: int, lens: int, quality: str, protocol: str = PROTOCOL_RTSP) -> str:
-        """Find the first RTSP URL the camera accepts (DESCRIBE); cache and return it."""
+        """Pick the URL to play: the first RTSP URL the camera confirms (DESCRIBE); cache it.
+
+        When no URL can be confirmed (the check itself can fail on some firmware) an RTSP
+        URL is still preferred; FLV is used only for H.264 streams, when RTSP is switched
+        off on the camera or every RTSP path was answered "not found".
+        """
+        key = (index, lens, quality)
         candidates = self.stream_candidates(index, lens, quality, protocol)
-        if protocol == PROTOCOL_FLV and candidates[0].startswith("http"):
+        rtsp_urls = [u for u in candidates if u.startswith("rtsp://")]
+        http_urls = [u for u in candidates if u.startswith("http")]
+        results: list[tuple[str, rtsp.DescribeResult]] = []
+        chosen, confirmed = "", False
+        if candidates and candidates[0].startswith("http"):
+            # FLV first by design: the FLV setting, or an NVR's telephoto sub stream.
             chosen = candidates[0]
         else:
-            chosen = ""
-            for url in candidates:
-                if not url.startswith("rtsp://"):
-                    continue
-                result = rtsp.describe(url, self.client.username, self.client.password, timeout=4)
-                if result.ok:
-                    chosen = url
-                    if result.codec:
-                        self._codecs[(index, lens, quality)] = result.codec
-                    break
-                if result.status == 0 and "refused" in result.reason.lower():
-                    # RTSP is disabled or on another port: fall back to FLV.
-                    break
+            rtsp_off = not self.ports.get("rtsp_enabled", True)
+            if not rtsp_off:
+                for url in rtsp_urls:
+                    result = rtsp.describe(url, self.client.username, self.client.password, timeout=5)
+                    results.append((url, result))
+                    if result.ok:
+                        chosen, confirmed = url, True
+                        if result.codec:
+                            self._codecs[key] = result.codec
+                        break
+                    if result.refused:
+                        rtsp_off = True
+                        break
             if not chosen:
-                chosen = next((u for u in candidates if u.startswith("http")), candidates[0])
+                all_missing = bool(results) and all(r.status in (404, 454) for _u, r in results)
+                if http_urls and (rtsp_off or all_missing):
+                    chosen = http_urls[0]
+                else:
+                    unanswered = [u for u, r in results if r.status not in (404, 454)]
+                    chosen = (unanswered or rtsp_urls or candidates)[0]
         with self._lock:
             self._stream_urls[(index, lens, quality, protocol)] = chosen
+            self.probe_log[key] = ProbeRecord(chosen, confirmed, [(u, r) for u, r in results])
         return chosen
 
     def probe_streams(self) -> None:
@@ -485,8 +537,10 @@ class Device:
             except ReolinkError:
                 pass
 
-        # NVRs have many channels: probe them side by side.
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(jobs)))) as pool:
+        # One RTSP connection at a time per camera (Reolink's RTSP server is easily
+        # overwhelmed); an NVR's channels are checked a few at a time.
+        workers = 3 if self.is_nvr else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(probe, jobs))
 
     def forget_stream(self, index: int, lens: int, quality: str, protocol: str = PROTOCOL_RTSP) -> None:

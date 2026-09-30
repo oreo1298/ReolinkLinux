@@ -175,6 +175,10 @@ class CameraManager(QObject):
             self.config.save()
         self.camera_changed.emit(cam_id)
         self.cameras_changed.emit()
+        if not device.demo and not device.ports.get("rtsp_enabled", True):
+            self.notify.emit(f"{e.cfg.label}: RTSP is switched off on the camera, so only Fluent video can play. "
+                             "Turn it on in the Reolink app: Settings → Network → Advanced → Server Settings.",
+                             "warning")
 
     def _connect_failed(self, cam_id: str, exc: Exception) -> None:
         e = self.entries.get(cam_id)

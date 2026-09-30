@@ -123,6 +123,9 @@ class CameraDialog(QDialog):
         self.continuous = QCheckBox("Record continuously to this PC while ReolinkLinux is running")
         self.continuous.setChecked(self.cfg.continuous_record)
         lay.addWidget(self.continuous)
+        self.software = QCheckBox("Software decoding (use if the picture shows coloured dots or lines)")
+        self.software.setChecked(self.cfg.software_decode)
+        lay.addWidget(self.software)
 
         help_box = QLabel(ENABLE_PORTS_HELP)
         help_box.setObjectName("Banner")
@@ -193,6 +196,7 @@ class CameraDialog(QDialog):
         cfg.https = self.scheme.currentData()
         cfg.port = self.port.value() or None
         cfg.continuous_record = self.continuous.isChecked()
+        cfg.software_decode = self.software.isChecked()
         password = self.password.text()
         if self.editing and not password and self.password.placeholderText() == "Unchanged":
             return cfg, None
@@ -300,8 +304,9 @@ class SettingsDialog(QDialog):
         v = QFormLayout(video)
         v.setVerticalSpacing(10)
         self.grid_quality = QComboBox()
-        self.grid_quality.addItem("Fluent (sub stream, low bandwidth)", "sub")
+        self.grid_quality.addItem("Automatic (Clear for up to 4 videos, else Fluent)", "auto")
         self.grid_quality.addItem("Clear (main stream, full quality)", "main")
+        self.grid_quality.addItem("Fluent (sub stream, low bandwidth)", "sub")
         self.grid_quality.setCurrentIndex(max(0, self.grid_quality.findData(s.grid_quality)))
         v.addRow("Grid of cameras", self.grid_quality)
         self.focus_quality = QComboBox()
@@ -315,9 +320,11 @@ class SettingsDialog(QDialog):
         self.protocol.setCurrentIndex(max(0, self.protocol.findData(s.protocol)))
         v.addRow("Stream protocol", self.protocol)
         self.hwdec = QComboBox()
-        for label, value in (("Automatic (recommended)", "auto-safe"), ("Automatic, copy back", "auto-copy-safe"),
-                             ("VA-API (Intel / AMD)", "vaapi"), ("NVDEC (NVIDIA)", "nvdec"),
-                             ("VDPAU", "vdpau"), ("Off (software decoding)", "no")):
+        for label, value in (("Automatic (recommended)", "auto-copy-safe"),
+                             ("Automatic, zero-copy (least CPU; can garble video on some systems)", "auto-safe"),
+                             ("VA-API, copy back (Intel / AMD)", "vaapi-copy"), ("NVDEC, copy back (NVIDIA)", "nvdec-copy"),
+                             ("VA-API, zero-copy", "vaapi"), ("NVDEC, zero-copy", "nvdec"),
+                             ("Off (software decoding)", "no")):
             self.hwdec.addItem(label, value)
         idx = self.hwdec.findData(s.hwdec)
         if idx < 0:
@@ -334,6 +341,11 @@ class SettingsDialog(QDialog):
         self.fill = QCheckBox("Fill tiles (crop the picture instead of showing black bars)")
         self.fill.setChecked(s.fill_tiles)
         v.addRow("", self.fill)
+        self.both_lenses = QCheckBox("Show both lenses of TrackMix cameras in the grid")
+        self.both_lenses.setChecked(s.both_lenses)
+        v.addRow("", self.both_lenses)
+        v.addRow("", _muted("If a camera's picture is covered in coloured dots or lines, right-click it and turn on "
+                            "Software decoding for that camera, or set Hardware decoding to Off."))
         v.addRow("", _muted("A 4K H.265 main stream needs H.265 support in FFmpeg/mpv. Fedora and openSUSE ship "
                             "without it by default; see the README for the one-line fix."))
         tabs.addTab(video, "Video")
@@ -404,6 +416,7 @@ class SettingsDialog(QDialog):
         s.low_latency = self.low_latency.isChecked()
         s.grid_audio = self.grid_audio.isChecked()
         s.fill_tiles = self.fill.isChecked()
+        s.both_lenses = self.both_lenses.isChecked()
         from ..core.config import default_picture_dir, default_video_dir
         vd, pd = self.video_dir.text().strip(), self.picture_dir.text().strip()
         s.video_dir = "" if vd == str(default_video_dir()) else vd
@@ -458,3 +471,52 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         lay.addWidget(buttons)
+
+
+class DiagnosticsDialog(QDialog):
+    """Collects the diagnostics report for one camera, with Copy / Save buttons."""
+
+    def __init__(self, parent, title: str, collect, local_lines: list[str]):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+
+        from .theme import mono_font
+        self.setWindowTitle(f"Diagnostics: {title}")
+        self.resize(900, 620)
+        lay = QVBoxLayout(self)
+        lay.addWidget(_muted("What the camera reports and how each stream was chosen. Passwords are removed, so "
+                             "this is safe to share when reporting a problem."))
+        self.text = QPlainTextEdit()
+        self.text.setObjectName("Log")
+        self.text.setReadOnly(True)
+        self.text.setFont(mono_font(9.5))
+        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.text.setPlainText("Collecting… opening each stream can take up to a minute.")
+        lay.addWidget(self.text, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        self.copy = buttons.addButton("Copy", QDialogButtonBox.ActionRole)
+        self.copy.setProperty("variant", "primary")
+        self.copy.setEnabled(False)
+        self.copy.clicked.connect(lambda: QApplication.clipboard().setText(self.text.toPlainText()))
+        self.save = buttons.addButton("Save…", QDialogButtonBox.ActionRole)
+        self.save.setEnabled(False)
+        self.save.clicked.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self._local = local_lines
+        worker.run(collect, self._done, self._failed)
+
+    def _done(self, text: str) -> None:
+        self.text.setPlainText(text + ("\n\n== this PC's players\n" + "\n".join(self._local) if self._local else ""))
+        self.copy.setEnabled(True)
+        self.save.setEnabled(True)
+
+    def _failed(self, exc: Exception) -> None:
+        self.text.setPlainText(f"Could not collect the report: {exc}\n\n" + "\n".join(self._local))
+        self.copy.setEnabled(True)
+
+    def _save(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save diagnostics", "reolinklinux-diagnostics.txt")
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self.text.toPlainText())

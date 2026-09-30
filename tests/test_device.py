@@ -71,12 +71,53 @@ def test_stream_probe_picks_working_urls(trackmix):
 
 def test_stream_candidates_fallbacks(duo2):
     dev = connect(duo2, probe=False)
-    cands = dev.stream_candidates(0, WIDE, MAIN)
-    paths = [u.rsplit("/", 1)[-1] for u in cands[:-1]]
-    assert paths == ["h265Preview_01_main", "Preview_01_main", "h264Preview_01_main"]
-    assert cands[-1].startswith("http://") and "stream=channel0_main.bcs" in cands[-1]
+    main = dev.stream_candidates(0, WIDE, MAIN)
+    assert [u.rsplit("/", 1)[-1] for u in main] == ["h265Preview_01_main", "Preview_01_main", "h264Preview_01_main"]
+    assert not any(u.startswith("http") for u in main)      # Reolink can't send H.265 over FLV
+    sub = dev.stream_candidates(0, WIDE, SUB)
+    assert sub[0].endswith("/h264Preview_01_sub") and "stream=channel0_sub.bcs" in sub[-1]
     flv = dev.stream_candidates(0, WIDE, SUB, protocol="flv")
     assert "stream=channel0_sub.bcs" in flv[0]
+    assert not any(u.startswith("http") for u in dev.stream_candidates(0, WIDE, MAIN, protocol="flv"))
+
+
+def test_inconclusive_probe_keeps_rtsp(duo2):
+    """If the RTSP check itself fails (auth quirks), play RTSP anyway: never FLV for H.265."""
+    duo2.rtsp_auth = "reject"
+    dev = connect(duo2)
+    assert dev.stream_url(0, WIDE, MAIN).endswith("/h265Preview_01_main")
+    assert dev.stream_url(0, WIDE, SUB).endswith("/h264Preview_01_sub")
+    rec = dev.probe_log[(0, WIDE, MAIN)]
+    assert not rec.confirmed and rec.tried and rec.tried[0][1].status == 401
+
+
+def test_rtsp_switched_off_uses_flv_for_h264_only(duo2):
+    duo2.rtsp_enabled = 0
+    dev = connect(duo2)
+    assert duo2.rtsp_requests == []                          # not even tried
+    assert "stream=channel0_sub.bcs" in dev.stream_url(0, WIDE, SUB)
+    assert dev.stream_url(0, WIDE, MAIN).startswith("rtsp://")
+
+
+def test_all_paths_missing_falls_back_to_flv(duo2):
+    duo2.rtsp_paths = {}
+    dev = connect(duo2)
+    assert "stream=channel0_sub.bcs" in dev.stream_url(0, WIDE, SUB)
+
+
+def test_probes_one_connection_at_a_time(trackmix):
+    connect(trackmix)
+    paths = [p for p, _a in trackmix.rtsp_requests]
+    assert paths.count("/h265Preview_01_main") >= 1 and paths.count("/h265Preview_02_main") >= 1
+
+
+def test_telephoto_detected_by_model_name(trackmix):
+    from reolinklinux.core.models import Channel
+    dev = connect(trackmix, probe=False)
+    assert dev._has_telephoto(Channel(0, model="Reolink TrackMix WiFi"), {})
+    assert dev._has_telephoto(Channel(0, model="RLC-81MA"), {})
+    dev.info.model = "RLC-811A"
+    assert not dev._has_telephoto(Channel(0, model="RLC-811A"), {})
 
 
 def test_ptz_and_lights_send_the_right_commands(trackmix):

@@ -18,14 +18,16 @@ Reolink's line-up that has the standard HTTP(S) and RTSP interfaces.
 **Live view**
 - **Full quality**: the "Clear" main stream at the camera's native resolution (4K, the Duo 2's
   4608 × 1728, 16 MP…) in H.264 or H.265, with **hardware decoding** (VA-API on Intel/AMD,
-  NVDEC on NVIDIA) through mpv. The grid uses the light "Fluent" stream, and a camera switches to
-  Clear when you enlarge it (both choices are in Settings, and per camera in the Controls panel).
+  NVDEC on NVIDIA) through mpv. With up to four videos on screen every one is shown in Clear;
+  larger grids switch to the light "Fluent" stream and a camera goes back to Clear when you enlarge
+  it. Both choices are in Settings, and per camera in the Controls panel.
 - A **grid** of all cameras that picks the best layout, or fixed 1 / 2×2 / 3×3 / 4×4 layouts
   with pages. **Double-click** a camera to enlarge it, and use **full screen** (F11).
 - **Digital zoom and pan**: scroll on any video to zoom in up to 8× around the mouse pointer, and
   drag to move around. Great for reading plates and faces on the Duo 2's wide panorama.
-- **Dual-lens cameras**: the TrackMix's wide and telephoto lenses are shown **side by side** when
-  enlarged, or one at a time (Wide / Tele / Both). Original Duo cameras appear as two channels.
+- **Dual-lens cameras**: the TrackMix's wide and telephoto lenses are both shown, in the grid and
+  side by side when enlarged, or one at a time (Wide / Tele / Both). Original Duo cameras appear as
+  two channels.
 - **Live detection badges** for person, vehicle, animal and motion events, on the video and in the
   camera list.
 - **Low latency** playback, sound on the enlarged camera, and **automatic
@@ -293,6 +295,7 @@ reolinkctl -c Driveway recordings --date 2026-09-30
 reolinkctl -c Driveway download --date 2026-09-30 --all -o ~/Videos/driveway
 reolinkctl -c Driveway record --duration 600      # ten minutes to ./Driveway_<time>.mp4
 reolinkctl -c Driveway stream-url                 # RTSP URL for VLC, mpv, Frigate…
+reolinkctl -c Driveway diagnose                   # troubleshooting report (passwords removed)
 reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (asks for the password)
 ```
 
@@ -304,13 +307,23 @@ reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (a
   [Before you start](#before-you-start-turn-on-https-and-rtsp-on-the-camera)), or the address is
   wrong. Check that the camera answers `ping`.
 - **The camera connects but the video says "Connection refused" or stays black**: RTSP is
-  switched off on the camera.
+  switched off on the camera. The app warns about this when it connects. Without RTSP only the
+  Fluent (H.264) streams can play, over FLV; 4K cameras send their Clear stream in H.265, which
+  needs RTSP.
+- **The picture is covered in coloured dots or lines**: the GPU decoder and the display disagree
+  about the frame layout (seen on some multi-GPU and driver combinations). Hardware decoding now
+  copies frames back by default, which avoids it. If you still see it, right-click the camera and
+  turn on **Software decoding**, or set *Hardware decoding* to *Off* in Settings → Video.
+- **Anything else with the video** (one lens or quality won't play, stutters, wrong picture):
+  open the camera's **Device** tab and click **Diagnostics…**, or run
+  `reolinkctl -c NAME diagnose`. The report lists every stream URL the app tried and what the
+  camera answered, with passwords removed, so it is safe to paste into an issue.
 - **"The camera locked logins"**: too many wrong passwords. The camera accepts logins again after
   a few minutes.
 - **The 4K / Clear stream stutters or uses a lot of CPU**: open the **Device** tab; the
   *Decoder* line should say *hardware*. Install your GPU's VA-API driver (see Installation). On
-  Fedora and openSUSE, install the full FFmpeg for H.265. On a slow computer, use Fluent in the
-  grid (the default), or turn off *Low latency* in Settings → Video.
+  Fedora and openSUSE, install the full FFmpeg for H.265. On a slow computer, set the grid to
+  Fluent in Settings → Video, or turn off *Low latency*.
 - **Video is black in a virtual machine**: ReolinkLinux detects software OpenGL (llvmpipe) and
   switches mpv to its simple renderer. Set `REOLINKLINUX_SIMPLE_RENDERER=1` to force it on any
   other system that shows black or wrongly coloured video.

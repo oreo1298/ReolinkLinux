@@ -128,6 +128,14 @@ def _hide(url: str) -> str:
     return re.sub(r"(rtsp://[^:/@]+:)[^@]*@", r"\1***@", re.sub(r"password=[^&]*", "password=***", url))
 
 
+def cmd_diagnose(args) -> int:
+    from .core import diagnose
+    dev = _connected(args, probe=True)
+    print(diagnose.report(dev, run_ffprobe=not args.no_ffprobe))
+    dev.disconnect()
+    return 0
+
+
 def cmd_stream_url(args) -> int:
     dev = _connected(args)
     url = dev.probe_stream(args.channel, _lens(args), SUB if args.sub else MAIN, "flv" if args.flv else "rtsp")
@@ -335,6 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--no-scan", action="store_true", help="ONVIF discovery only, no subnet scan")
     i = cmd("info", cmd_info, "device details, capabilities and stream URLs", channel=False)
     i.add_argument("--json", action="store_true")
+    dg = cmd("diagnose", cmd_diagnose, "report streams and capabilities for troubleshooting (safe to share)",
+             channel=False)
+    dg.add_argument("--no-ffprobe", action="store_true", help="skip opening each stream with ffprobe")
     s = cmd("stream-url", cmd_stream_url, "print the working RTSP (or FLV) URL", lens=True)
     s.add_argument("--sub", action="store_true", help="fluent (sub) stream")
     s.add_argument("--flv", action="store_true", help="FLV over HTTP(S) instead of RTSP")

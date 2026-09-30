@@ -417,11 +417,15 @@ class ControlPanel(QWidget):
         self.btn_web = QPushButton("Web interface")
         self.btn_web.setToolTip("Open the camera's own web page in your browser")
         self.btn_web.clicked.connect(self._open_web)
+        self.btn_diag = QPushButton("Diagnostics…")
+        self.btn_diag.setToolTip("A report of the camera's streams and settings, for troubleshooting")
+        self.btn_diag.clicked.connect(self._diagnostics)
         self.btn_reboot = QPushButton("Reboot")
         self.btn_reboot.setProperty("variant", "danger")
         self.btn_reboot.clicked.connect(self._reboot)
         row.addWidget(self.btn_sync)
         row.addWidget(self.btn_web)
+        row.addWidget(self.btn_diag)
         row.addStretch(1)
         row.addWidget(self.btn_reboot)
         lay.addLayout(row)
@@ -790,6 +794,38 @@ class ControlPanel(QWidget):
         self._control(lambda d, i: d.sync_clock(now), "Clock",
                       lambda _r: (self.cameras.notify.emit("Camera clock set to this PC's time", "success"),
                                   self.refresh()))
+
+    def _diagnostics(self) -> None:
+        from ..core import diagnose
+        from . import mpv
+        from .dialogs import DiagnosticsDialog
+        e = self.cameras.entry(self.cam_id) if self.cam_id else None
+        if not e or not e.online:
+            return
+        dev = e.device
+        try:
+            major, minor = mpv.api_version()
+            mpv_line = f"libmpv API {major}.{minor}"
+        except OSError:
+            mpv_line = "libmpv missing"
+        s = self.cameras.config.settings
+        extra = [f"{mpv_line}; hwdec setting {s.hwdec}; protocol {s.protocol}; low latency {s.low_latency}; "
+                 f"software decoding for this camera: {e.cfg.software_decode}"]
+        local = []
+        for key, tile in self.wall.tiles.items():
+            if not key.startswith(f"{self.cam_id}/"):
+                continue
+            v = tile.video
+            st = v.stats()
+            local.append(f"[{'tele' if tile.source.lens else 'wide'} {self.wall.tile_quality.get(key, '?')}] "
+                         f"{'playing' if v.has_frame else 'no picture'}: {diagnose.redact(v.current_url())}")
+            if st:
+                local.append(f"    {st['width']}x{st['height']} {st['codec']}, decoder {st['hwdec']}, "
+                             f"{st['fps']:.1f} fps, dropped {st['dropped']}")
+            if v.error or tile.overlay.status:
+                local.append(f"    last error: {diagnose.redact(v.error or tile.overlay.status)}")
+        DiagnosticsDialog(self, self.cameras.label(self.cam_id, self.ch_index),
+                          lambda: diagnose.report(dev, extra=extra), local).exec()
 
     def _open_web(self) -> None:
         e = self.cameras.entry(self.cam_id) if self.cam_id else None

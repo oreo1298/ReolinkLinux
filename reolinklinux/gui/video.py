@@ -42,7 +42,7 @@ class VideoWidget(QOpenGLWidget):
     _frame_ready = Signal()
     _wakeup = Signal()
 
-    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-safe", low_latency: bool = True):
+    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True):
         super().__init__(parent)
         self.live = live
         self.setUpdateBehavior(QOpenGLWidget.NoPartialUpdate)
@@ -73,10 +73,10 @@ class VideoWidget(QOpenGLWidget):
     # ------------------------------------------------------------------ setup
     def _create_player(self, hwdec: str, low_latency: bool) -> None:
         opts: dict[str, object] = {
-            "vo": "libmpv", "hwdec": hwdec or "auto-safe", "osd-level": 0, "terminal": "no",
+            "vo": "libmpv", "osd-level": 0, "terminal": "no",
             "input-default-bindings": "no", "input-vo-keyboard": "no", "idle": "yes",
             "keep-open": "no" if self.live else "yes", "mute": "yes", "volume": 100,
-            "background-color": "#07090c", "network-timeout": 12,
+            "network-timeout": 12,
             "rtsp-transport": "tcp", "tls-verify": "no", "ytdl": "no", "load-scripts": "no",
             "screenshot-format": "jpg", "screenshot-jpeg-quality": 95, "audio-client-name": "ReolinkLinux",
             "demuxer-lavf-o-add": "reconnect=1", "force-seekable": "yes",
@@ -97,6 +97,11 @@ class VideoWidget(QOpenGLWidget):
             self.player = None
             self._last_error = str(exc)
             return
+        # Older mpv releases lack some hwdec values: fall back to the nearest one they know.
+        fallbacks = {"auto-copy-safe": ["auto-copy-safe", "auto-copy"], "auto-safe": ["auto-safe", "auto"]}
+        for value in fallbacks.get(hwdec, [hwdec]) + ["no"]:
+            if value and self.player.set("hwdec", value):
+                break
         self.player.request_log_messages("error")
         for name, fmt in (("dwidth", mpv.FORMAT_INT64), ("dheight", mpv.FORMAT_INT64),
                           ("time-pos", mpv.FORMAT_DOUBLE), ("duration", mpv.FORMAT_DOUBLE),
@@ -622,7 +627,7 @@ class VideoTile(QFrame):
 
     retry_requested = Signal()
 
-    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-safe", low_latency: bool = True):
+    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True):
         super().__init__(parent)
         self.setObjectName("Tile")
         self.setMinimumSize(160, 90)

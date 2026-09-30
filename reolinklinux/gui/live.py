@@ -281,28 +281,23 @@ class VideoWall(QFrame):
         self._clock.start(1000)
 
     # ------------------------------------------------------------------ sources
-    def _lens_mode(self, view_key: str) -> str:
-        return self.lens_pref.get(view_key, "")
+    def _lenses(self, cam_id: str, ch_index: int) -> list[int]:
+        ch = self.cameras.channel(cam_id, ch_index)
+        if ch is None:
+            return [WIDE]
+        mode = self.lens_mode(cam_id, ch_index)
+        lenses = {"wide": [WIDE], "tele": [TELE], "both": [WIDE, TELE]}.get(mode, [WIDE])
+        return [lens for lens in lenses if lens in ch.lenses] or [WIDE]
 
     def visible_sources(self) -> list[Source]:
-        sources = self.cameras.sources()
         if self.focus:
             cam_id, ch_index = self.focus
-            ch = self.cameras.channel(cam_id, ch_index)
-            if ch is None:
+            if self.cameras.channel(cam_id, ch_index) is None:
                 self.focus = None
                 return self.visible_sources()
-            mode = self._lens_mode(f"{cam_id}/{ch_index}") or ("both" if ch.caps.telephoto else "wide")
-            lenses = {"wide": [WIDE], "tele": [TELE], "both": [WIDE, TELE]}.get(mode, [WIDE])
-            lenses = [lens for lens in lenses if lens in ch.lenses] or [WIDE]
-            return [Source(cam_id, ch_index, lens) for lens in lenses]
-        out = []
-        for s in sources:
-            mode = self._lens_mode(s.view_key)
-            ch = self.cameras.channel(s.cam_id, s.channel)
-            lens = TELE if mode == "tele" and ch and ch.caps.telephoto else WIDE
-            out.append(Source(s.cam_id, s.channel, lens))
-        return out
+            return [Source(cam_id, ch_index, lens) for lens in self._lenses(cam_id, ch_index)]
+        return [Source(s.cam_id, s.channel, lens) for s in self.cameras.sources()
+                for lens in self._lenses(s.cam_id, s.channel)]
 
     def page_size(self) -> int:
         return {"1": 1, "4": 4, "9": 9, "16": 16}.get(self.layout_mode, 0)
@@ -315,8 +310,12 @@ class VideoWall(QFrame):
         if source.key in self.quality_override:
             return self.quality_override[source.key]
         s = self.config.settings
-        if self.focus or len(self.visible_sources()) == 1:
+        shown = len(self.visible_sources())
+        if self.focus or shown == 1:
             return s.focus_quality
+        if s.grid_quality == "auto":
+            # Full quality while the videos are big enough to show it.
+            return MAIN if shown <= 4 else SUB
         return s.grid_quality
 
     # ------------------------------------------------------------------ layout
@@ -419,7 +418,9 @@ class VideoWall(QFrame):
 
     def _make_tile(self, source: Source) -> VideoTile:
         s = self.config.settings
-        tile = VideoTile(self, live=True, hwdec=s.hwdec, low_latency=s.low_latency)
+        e = self.cameras.entry(source.cam_id)
+        hwdec = "no" if e and e.cfg.software_decode else s.hwdec
+        tile = VideoTile(self, live=True, hwdec=hwdec, low_latency=s.low_latency)
         tile.source = source
         tile.video.set_fill(self.fill)
         tile.video.clicked.connect(lambda src=source: self._tile_clicked(src))
@@ -570,11 +571,11 @@ class VideoWall(QFrame):
         self.relayout()
 
     def lens_mode(self, cam_id: str, channel: int) -> str:
-        ch = self.cameras.channel(cam_id, channel)
         mode = self.lens_pref.get(f"{cam_id}/{channel}")
         if mode:
             return mode
-        if self.focus == (cam_id, channel) and ch and ch.caps.telephoto:
+        ch = self.cameras.channel(cam_id, channel)
+        if ch and ch.caps.telephoto and (self.focus == (cam_id, channel) or self.config.settings.both_lenses):
             return "both"
         return "wide"
 
@@ -610,10 +611,11 @@ class VideoWall(QFrame):
         tiles = self.tiles_for_view(cam_id, channel)
         return tiles[0] if tiles else None
 
-    def apply_settings(self) -> None:
+    def apply_settings(self, cam_id: str | None = None) -> None:
         """Recreate players after a playback setting (hwdec, latency, protocol) changed."""
         for key in list(self.tiles):
-            self._drop_tile(key)
+            if cam_id is None or key.startswith(cam_id + "/"):
+                self._drop_tile(key)
         self.fill = self.config.settings.fill_tiles
         self.relayout()
 

@@ -569,6 +569,12 @@ class MainWindow(QMainWindow):
             menu.addAction("Reset zoom", tile.video.reset_zoom)
         menu.addSeparator()
         menu.addAction("Reconnect", lambda: self.wall.reload(source))
+        e = self.cameras.entry(source.cam_id)
+        if e and not e.cfg.demo:
+            soft = menu.addAction("Software decoding (fixes coloured dots or lines)")
+            soft.setCheckable(True)
+            soft.setChecked(e.cfg.software_decode)
+            soft.toggled.connect(lambda on, cid=source.cam_id: self._set_software_decode(cid, on))
         menu.addAction("Recordings on the camera…", lambda: (self.select_view(source.cam_id, source.channel),
                                                              self.show_page(1)))
         menu.addAction("Edit camera…", lambda: self.edit_camera(source.cam_id))
@@ -601,6 +607,15 @@ class MainWindow(QMainWindow):
         menu.addAction("Edit…", lambda: self.edit_camera(cam_id))
         menu.addAction("Remove…", lambda: self.remove_camera(cam_id))
         menu.exec(pos)
+
+    def _set_software_decode(self, cam_id: str, on: bool) -> None:
+        e = self.cameras.entry(cam_id)
+        if not e:
+            return
+        e.cfg.software_decode = on
+        self.config.save()
+        self.wall.apply_settings(cam_id)
+        self.show_message(f"{e.cfg.label}: {'software' if on else 'hardware'} video decoding", "info")
 
     def _set_continuous(self, cam_id: str, on: bool) -> None:
         e = self.cameras.entry(cam_id)
