@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.oreo1298.ReolinkLinux</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>ReolinkLinux</name>
+  <summary>Watch, control and record Reolink cameras and NVRs</summary>
+  <description>
+    <p>
+      A native Linux client for Reolink PoE cameras, NVRs and Home Hubs. It shows every
+      camera in full quality with hardware-accelerated decoding, controls pan, tilt, zoom,
+      presets, patrols and auto tracking, plays back and downloads recordings from the SD
+      card or NVR, and records live video to your computer.
+    </p>
+    <p>ReolinkLinux is an independent project and is not affiliated with Reolink.</p>
+  </description>
+  <launchable type="desktop-id">io.github.oreo1298.ReolinkLinux.desktop</launchable>
+  <url type="homepage">https://github.com/oreo1298/ReolinkLinux</url>
+  <url type="bugtracker">https://github.com/oreo1298/ReolinkLinux/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/oreo1298/ReolinkLinux/main/docs/screenshots/main-dark.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-09-30"/>
+  </releases>
+</component>

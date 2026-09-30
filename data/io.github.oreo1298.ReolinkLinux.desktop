@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ReolinkLinux
+GenericName=Security Camera Viewer
+Comment=Watch, control and record Reolink cameras and NVRs
+Exec=reolinklinux
+Icon=io.github.oreo1298.ReolinkLinux
+Terminal=false
+Categories=AudioVideo;Video;Player;Network;Qt;
+Keywords=Reolink;camera;CCTV;NVR;PTZ;RTSP;surveillance;security;TrackMix;Duo;
+StartupNotify=true
+StartupWMClass=reolinklinux

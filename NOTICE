@@ -1,0 +1,25 @@
+ReolinkLinux
+============
+
+ReolinkLinux is an independent project. It is not affiliated with, endorsed by or
+sponsored by Reolink. "Reolink", "Duo" and "TrackMix" are trademarks of their owner and
+are used only to describe compatibility.
+
+Third-party references
+----------------------
+
+* reolink_aio (https://github.com/starkillerOG/reolink_aio), MIT License,
+  Copyright (c) 2021 starkillerOG and contributors.
+  Used as a reference for the behaviour of the Reolink HTTP API across firmware
+  versions: stream URL naming, capability flags, the telephoto ("autotrack") stream of
+  dual-lens cameras, and the bit layout of the event flags in recording file names
+  (reolinklinux/core/recordings.py). No code is copied verbatim.
+
+* The event-flag layout in recording file names was first documented by sven337 in the
+  "Figuring out the file names" page of https://github.com/sven337/ReolinkLinux/wiki.
+
+Runtime libraries (not bundled)
+-------------------------------
+
+* Qt / PySide6 (LGPLv3), libmpv (LGPLv2.1+ or GPLv2+ depending on the build),
+  FFmpeg (LGPLv2.1+ or GPLv2+ depending on the build).
