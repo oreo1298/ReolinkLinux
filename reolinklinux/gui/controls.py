@@ -608,6 +608,8 @@ class ControlPanel(QWidget):
                     feats.append(name)
             ai = {"people": "person", "vehicle": "vehicle", "dog_cat": "animal", "face": "face", "package": "package"}
             dets = [ai.get(a, a) for a in c.ai_types]
+            if c.telephoto and ch.tele_main.resolution:
+                rows.append(("Telephoto", f"{ch.tele_main.resolution} {ch.tele_main.codec.upper()}".strip()))
             rows.append(("Features", ", ".join(feats) or "—"))
             rows.append(("AI detection", ", ".join(dets) or "motion only"))
         if not e.cfg.demo:

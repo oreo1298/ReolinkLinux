@@ -129,6 +129,10 @@ class Channel:
     sub: StreamInfo = field(default_factory=StreamInfo)
     rtsp_main: str = ""               # from GetRtspUrl, if the firmware reports it
     rtsp_sub: str = ""
+    tele_main: StreamInfo = field(default_factory=StreamInfo)   # telephoto lens (TrackMix)
+    tele_sub: StreamInfo = field(default_factory=StreamInfo)
+    tele_rtsp_main: str = ""
+    tele_rtsp_sub: str = ""
     presets: list[Preset] = field(default_factory=list)
     patrols: list[Preset] = field(default_factory=list)
     zoom: ZoomRange = field(default_factory=ZoomRange)

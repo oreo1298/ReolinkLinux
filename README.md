@@ -334,7 +334,8 @@ reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (a
 
 The live stream is RTSP over TCP. The URL is found by asking the camera (`GetRtspUrl`) and checking
 the candidates with an RTSP `DESCRIBE`, because different firmware generations name their streams
-differently. The TrackMix telephoto lens is the `Preview_01_autotrack` stream. Recordings are played
+differently. A TrackMix's telephoto lens is its second stream channel (`Preview_02_main`), or the
+`Preview_0N_autotrack` stream when the camera is connected through an NVR. Recordings are played
 through the camera's `Playback`/`Download` commands, with FLV as a fallback.
 
 ## Development

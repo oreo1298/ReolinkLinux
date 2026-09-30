@@ -61,8 +61,11 @@ def test_stream_probe_picks_working_urls(trackmix):
     assert main.endswith(f":{port}/h265Preview_01_main")
     assert "admin:s3cret%21%26pw@" in main          # password is URL-encoded
     assert dev.stream_url(0, WIDE, SUB).endswith("/h264Preview_01_sub")
-    assert dev.stream_url(0, TELE, MAIN).endswith("/Preview_01_autotrack")
+    # a TrackMix on its own serves the telephoto lens as stream channel 2
+    assert dev.stream_url(0, TELE, MAIN).endswith("/h265Preview_02_main")
     assert dev.stream_url(0, TELE, SUB).endswith("/h264Preview_02_sub")
+    ch = dev.channels[0]
+    assert ch.tele_main.resolution == "2560×1440"
     assert dev.stream_codec(0, WIDE, MAIN) == "h265"
 
 
@@ -130,14 +133,26 @@ def test_recording_search_and_download(trackmix, tmp_path):
     assert first.start == dt.datetime(2026, 9, 30, 8, 1, 2) and first.duration.total_seconds() == 118
     assert first.triggers & Trigger.PERSON and first.size == 2156000
     tele = dev.recordings(0, day, lens=TELE)
-    assert tele[0].lens == TELE
+    assert tele[0].lens == TELE and tele[0].channel == 0
     search = [c for c in trackmix.commands if c["cmd"] == "Search"][-1]["param"]["Search"]
-    assert search["iLogicChannel"] == 1 and search["streamType"] == "main"
+    assert search["channel"] == 1 and "iLogicChannel" not in search and search["streamType"] == "main"
     urls = dev.playback_urls(first)
     assert "cmd=Playback" in urls[0] and "cmd=Download" in urls[1] and "playback.bcs" in urls[2]
     path = tmp_path / first.local_filename("Garden")
     size = dev.download(first, str(path))
     assert size == 150000 and path.exists() and not os.path.exists(str(path) + ".part")
+
+
+def test_nvr_telephoto_uses_autotrack_streams(nvr):
+    dev = connect(nvr)
+    ch = dev.channel(1)
+    assert ch.caps.telephoto and not dev.channel(0).caps.telephoto
+    assert dev.stream_url(1, TELE, MAIN).endswith("/Preview_02_autotrack")
+    assert "channel1_autotrack_sub.bcs" in dev.stream_url(1, TELE, SUB)
+    assert dev.snapshot(1, TELE).endswith(b"T")
+    dev.recordings(1, dt.date(2026, 9, 30), lens=TELE)
+    search = [c for c in nvr.commands if c["cmd"] == "Search"][-1]["param"]["Search"]
+    assert search["channel"] == 1 and search["iLogicChannel"] == 1
 
 
 def test_nvr_download_prepares_file(nvr, tmp_path):

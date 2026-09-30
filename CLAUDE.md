@@ -30,8 +30,10 @@ PTZ, lights, SD-card playback and downloads, local recording (FFmpeg), plus the
   (per-camera SerialQueue), not the shared pool.
 - Worker results come back through `worker.run(fn, done, error)`; callbacks run on the
   GUI thread. Don't touch Qt objects inside `fn`.
-- The TrackMix telephoto stream is `Preview_01_autotrack` (RTSP) / `channel0_autotrack_*.bcs`
-  (FLV); SD-card search/snapshot for it use `iLogicChannel: 1`.
+- TrackMix telephoto lens: on its own it is stream channel index+1 (`Preview_02_main`,
+  `Snap/Search channel=1`); behind an NVR/Home Hub it is the channel's autotrack stream
+  (`Preview_0N_autotrack`, `channelN_autotrack_*.bcs`, `iLogicChannel: 1`). `Device._tele_forms`
+  / `_tele_candidates` try the likely form first and fall back to the other.
 - Credentials never go into logs or error text: see `_clean_error` / `_redact` / `_hide`.
 - The GUI shares the EZP2019Linux / FirmwareLab design system (`theme.py`, `icons.py`,
   `widgets.py`); keep it visually consistent with those apps.

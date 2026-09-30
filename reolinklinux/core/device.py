@@ -174,11 +174,11 @@ class Device:
 
     def _fetch_channel_data(self, channels: list[Channel]) -> None:
         cmds: list[dict] = []
-        owners: list[Channel] = []
+        owners: list[tuple[Channel, str]] = []
 
-        def add(ch: Channel, cmd: str, action: int = 0, param: dict | None = None) -> None:
+        def add(ch: Channel, cmd: str, action: int = 0, param: dict | None = None, tag: str = "") -> None:
             cmds.append({"cmd": cmd, "action": action, "param": param if param is not None else {"channel": ch.index}})
-            owners.append(ch)
+            owners.append((ch, tag or cmd))
 
         known = bool(self.abilities.get("abilityChn"))
         for ch in channels:
@@ -205,10 +205,15 @@ class Device:
                 add(ch, "GetIrLights")
             if not known or _ver(a, "floodLight") > 0 or _ver(a, "supportFLswitch") > 0:
                 add(ch, "GetWhiteLed")
+            if not self.is_nvr and _ver(a, "supportAutoTrackStream") > 0:
+                # A TrackMix on its own serves the telephoto lens as stream channel 1.
+                tele = {"channel": ch.index + 1}
+                add(ch, "GetEnc", param=tele, tag="tele:GetEnc")
+                add(ch, "GetRtspUrl", param=tele, tag="tele:GetRtspUrl")
         results = self.client.execute(cmds) if cmds else []
         answered: dict[int, dict[str, dict]] = {}
-        for ch, item in zip(owners, results):
-            answered.setdefault(ch.index, {})[str(item.get("cmd"))] = item
+        for (ch, tag), item in zip(owners, results):
+            answered.setdefault(ch.index, {})[tag] = item
         for ch in channels:
             self._apply_channel(ch, answered.get(ch.index, {}), known)
 
@@ -223,6 +228,13 @@ class Device:
         if ok(r.get("GetRtspUrl", {})):
             u = r["GetRtspUrl"]["value"].get("rtspUrl", {})
             ch.rtsp_main, ch.rtsp_sub = str(u.get("mainStream", "")), str(u.get("subStream", ""))
+        if ok(r.get("tele:GetEnc", {})):
+            enc = r["tele:GetEnc"]["value"].get("Enc", {})
+            ch.tele_main = _stream_info(enc.get("mainStream", {}) or {})
+            ch.tele_sub = _stream_info(enc.get("subStream", {}) or {})
+        if ok(r.get("tele:GetRtspUrl", {})):
+            u = r["tele:GetRtspUrl"]["value"].get("rtspUrl", {})
+            ch.tele_rtsp_main, ch.tele_rtsp_sub = str(u.get("mainStream", "")), str(u.get("subStream", ""))
         if ok(r.get("GetOsd", {})) and not ch.name:
             ch.name = str(r["GetOsd"]["value"].get("Osd", {}).get("osdChannel", {}).get("name", ""))
         ch.name = ch.name or (f"Channel {ch.index + 1}" if self.is_nvr else self.info.name or self.info.model)
@@ -378,21 +390,10 @@ class Device:
         ch = self.channel(index)
         cc = f"{index + 1:02d}"
         base = self._rtsp_base()
-        flv_name = f"channel{index}_{'autotrack_' if lens == TELE else ''}{quality}.bcs"
-        flv = [self._flv_url(flv_name)]
+        flv = [self._flv_url(f"channel{index}_{quality}.bcs")]
         out: list[str] = []
         if lens == TELE:
-            nc = f"{index + 2:02d}" if not self.is_nvr else cc
-            if quality == MAIN:
-                out = [f"{base}/Preview_{cc}_autotrack", f"{base}/h265Preview_{nc}_main",
-                       f"{base}/h264Preview_{nc}_main", f"{base}/Preview_{nc}_main"]
-                if self.is_nvr:
-                    out = out[:1]
-            else:
-                out = [f"{base}/Preview_{cc}_autotrack_sub"]
-                if not self.is_nvr:
-                    out += [f"{base}/h264Preview_{nc}_sub", f"{base}/Preview_{nc}_sub"]
-            return (flv + out) if protocol == PROTOCOL_FLV else (out + flv)
+            return self._tele_candidates(ch, quality, protocol)
         info = ch.main if quality == MAIN else ch.sub
         enc = info.codec if info.codec in ("h264", "h265") else ("h265" if quality == MAIN and ch.caps.main_h265 else "h264")
         other = "h264" if enc == "h265" else "h265"
@@ -408,6 +409,34 @@ class Device:
         if protocol == PROTOCOL_FLV and not (quality == MAIN and enc == "h265"):
             return flv + seen
         return seen + flv
+
+    def _tele_candidates(self, ch: Channel, quality: str, protocol: str) -> list[str]:
+        """Telephoto-lens streams. A TrackMix on its own serves them as the next channel
+        (``Preview_02_main``); behind an NVR or Home Hub they are the camera channel's
+        "autotrack" streams (the next NVR channel is another camera)."""
+        base = self._rtsp_base()
+        autotrack = f"{base}/Preview_{ch.index + 1:02d}_autotrack" + ("" if quality == MAIN else "_sub")
+        flv_auto = self._flv_url(f"channel{ch.index}_autotrack_{quality}.bcs")
+        if self.is_nvr:
+            # The FLV form is the reliable one for the telephoto sub stream.
+            return [flv_auto, autotrack] if quality == SUB or protocol == PROTOCOL_FLV else [autotrack, flv_auto]
+        nc = f"{ch.index + 2:02d}"
+        info = ch.tele_main if quality == MAIN else ch.tele_sub
+        default = "h265" if quality == MAIN and ch.caps.main_h265 else "h264"
+        enc = info.codec if info.codec in ("h264", "h265") else default
+        other = "h264" if enc == "h265" else "h265"
+        reported = ch.tele_rtsp_main if quality == MAIN else ch.tele_rtsp_sub
+        rtsp_urls = ([self._with_credentials(reported)] if reported else []) + [
+            f"{base}/{enc}Preview_{nc}_{quality}", f"{base}/Preview_{nc}_{quality}",
+            f"{base}/{other}Preview_{nc}_{quality}", autotrack]
+        flv = [self._flv_url(f"channel{ch.index + 1}_{quality}.bcs"), flv_auto]
+        ordered = flv + rtsp_urls if protocol == PROTOCOL_FLV else rtsp_urls + flv
+        return list(dict.fromkeys(ordered))
+
+    def _tele_forms(self, index: int) -> list[tuple[int, dict]]:
+        """(channel, extra parameters) addressing the telephoto lens in Snap/Search, likely first."""
+        direct, logical = (index + 1, {}), (index, {"iLogicChannel": 1})
+        return [logical] if self.is_nvr else [direct, logical]
 
     def stream_url(self, index: int, lens: int = WIDE, quality: str = MAIN,
                    protocol: str = PROTOCOL_RTSP) -> str:
@@ -578,14 +607,20 @@ class Device:
 
     # ------------------------------------------------------------------ snapshots / time
     def snapshot(self, index: int, lens: int = WIDE) -> bytes:
-        rs = "".join(random.choices(string.ascii_letters + string.digits, k=12))
-        params = {"cmd": "Snap", "channel": index, "rs": rs, "snapType": "main"}
-        if lens == TELE:
-            params["iLogicChannel"] = 1
-        data = self.client.get_bytes(params, timeout=20)
-        if not data.startswith(b"\xff\xd8"):
-            raise ApiError("Snap", None, "the camera did not return a JPEG image")
-        return data
+        forms = self._tele_forms(index) if lens == TELE else [(index, {})]
+        last: Exception | None = None
+        for channel, extra in forms:
+            rs = "".join(random.choices(string.ascii_letters + string.digits, k=12))
+            params = {"cmd": "Snap", "channel": channel, "rs": rs, "snapType": "main", **extra}
+            try:
+                data = self.client.get_bytes(params, timeout=20)
+            except ApiError as exc:
+                last = exc
+                continue
+            if data.startswith(b"\xff\xd8"):
+                return data
+            last = ApiError("Snap", None, "the camera did not return a JPEG image")
+        raise last or ApiError("Snap", None, "no snapshot")
 
     def read_clock(self) -> dt.datetime | None:
         self._parse_time(self.client.command("GetTime"))
@@ -609,12 +644,18 @@ class Device:
     # ------------------------------------------------------------------ recordings
     def _search(self, index: int, start: dt.datetime, end: dt.datetime, only_status: bool,
                 stream: str, lens: int) -> dict:
-        search = {"channel": index, "onlyStatus": 1 if only_status else 0, "streamType": stream,
-                  "StartTime": to_reolink_time(start), "EndTime": to_reolink_time(end)}
-        if lens == TELE:
-            search["iLogicChannel"] = 1
-        value = self.client.command("Search", {"Search": search})
-        return value.get("SearchResult", {}) or {}
+        forms = self._tele_forms(index) if lens == TELE else [(index, {})]
+        last: Exception | None = None
+        for channel, extra in forms:
+            search = {"channel": channel, "onlyStatus": 1 if only_status else 0, "streamType": stream,
+                      "StartTime": to_reolink_time(start), "EndTime": to_reolink_time(end), **extra}
+            try:
+                value = self.client.command("Search", {"Search": search})
+            except ApiError as exc:
+                last = exc
+                continue
+            return value.get("SearchResult", {}) or {}
+        raise last or ApiError("Search", None, "search failed")
 
     def recording_days(self, index: int, year: int, month: int, stream: str = MAIN, lens: int = WIDE) -> set[int]:
         start = dt.datetime(year, month, 1)
@@ -660,9 +701,14 @@ class Device:
         output = os.path.basename(name) or f"{start}.mp4"
         urls = [self.client.url_with_token({"cmd": "Playback", "source": name, "output": output, "start": start}),
                 self.client.url_with_token({"cmd": "Download", "source": name, "output": output})]
-        stype = {(WIDE, MAIN): 0, (WIDE, SUB): 1, (TELE, MAIN): 2, (TELE, SUB): 3}[(rec.lens, rec.stream if rec.stream in (MAIN, SUB) else MAIN)]
+        stream = rec.stream if rec.stream in (MAIN, SUB) else MAIN
+        channel = rec.channel
+        if rec.lens == TELE and not self.is_nvr:
+            channel, stype = rec.channel + 1, 0 if stream == MAIN else 1
+        else:
+            stype = {(WIDE, MAIN): 0, (WIDE, SUB): 1, (TELE, MAIN): 2, (TELE, SUB): 3}[(rec.lens, stream)]
         urls.append(self._flv_url("playback.bcs").replace(
-            "stream=playback.bcs", f"stream=playback.bcs&channel={rec.channel}&type={stype}&start={start}&seek=0"))
+            "stream=playback.bcs", f"stream=playback.bcs&channel={channel}&type={stype}&start={start}&seek=0"))
         return urls
 
     def download(self, rec: Recording, path: str, progress: Callable[[int, int], None] | None = None,

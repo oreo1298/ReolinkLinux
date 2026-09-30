@@ -71,8 +71,15 @@ class FakeCamera:
         self.port = self.http.server_address[1]
         self.rtsp = _RtspServer(("127.0.0.1", 0), self)
         self.rtsp_port = self.rtsp.server_address[1]
-        self.rtsp_paths = {"/h265Preview_01_main": "H265", "/h264Preview_01_sub": "H264",
-                           "/Preview_01_autotrack": "H265", "/h264Preview_02_sub": "H264"}
+        if profile == "nvr":
+            # channel 2 is a TrackMix: its telephoto lens is the "autotrack" stream
+            self.rtsp_paths = {"/h264Preview_01_main": "H264", "/h264Preview_01_sub": "H264",
+                               "/h265Preview_02_main": "H265", "/h264Preview_02_sub": "H264",
+                               "/Preview_02_autotrack": "H265"}
+        else:
+            # a camera on its own: the TrackMix telephoto lens is stream channel 2
+            self.rtsp_paths = {"/h265Preview_01_main": "H265", "/h264Preview_01_sub": "H264",
+                               "/h265Preview_02_main": "H265", "/h264Preview_02_sub": "H264"}
         for t in (threading.Thread(target=self.http.serve_forever, daemon=True),
                   threading.Thread(target=self.rtsp.serve_forever, daemon=True)):
             t.start()
@@ -104,7 +111,11 @@ class FakeCamera:
             return 200, "text/html", json.dumps([{"cmd": cmd, "code": 1, "error": {
                 "detail": "please login first", "rspCode": -6}}]).encode()
         if cmd == "Snap":
-            return 200, "image/jpeg", b"\xff\xd8\xff\xe0JPEGDATA" + (b"T" if query.get("iLogicChannel") else b"W")
+            tele = query.get("iLogicChannel") == "1" if self.kind == "nvr" else query.get("channel") == "1"
+            if self.kind != "nvr" and query.get("iLogicChannel"):
+                return 200, "text/html", json.dumps([{"cmd": "Snap", "code": 1, "error": {
+                    "detail": "param error", "rspCode": -4}}]).encode()
+            return 200, "image/jpeg", b"\xff\xd8\xff\xe0JPEGDATA" + (b"T" if tele else b"W")
         if cmd == "Download":
             data = b"MP4" * 50000
             return 200, "application/octet-stream", data
@@ -142,7 +153,10 @@ class FakeCamera:
             return ok({"count": 8, "status": status})
         if cmd == "GetAbility":
             n = 8 if nvr else 1
-            return ok({"Ability": {"GetWhiteLed": _ab(1), "rtsp": _ab(3), "abilityChn": [dict(chn) for _ in range(n)]}})
+            chans = [dict(chn) for _ in range(n)]
+            if nvr:
+                chans[1].update(PROFILES["trackmix"]["chn"])
+            return ok({"Ability": {"GetWhiteLed": _ab(1), "rtsp": _ab(3), "abilityChn": chans}})
         if cmd == "GetNetPort":
             return ok({"NetPort": {"httpEnable": 1, "httpPort": 80, "httpsEnable": 1, "httpsPort": 443,
                                    "mediaPort": 9000, "onvifEnable": 1, "onvifPort": 8000, "rtmpEnable": 1,
@@ -161,12 +175,15 @@ class FakeCamera:
             return ok({"rspCode": 200})
         if cmd == "GetEnc":
             main, sub = prof["enc"]
+            if ch == 1 and self.kind == "trackmix":
+                main = {"width": 2560, "height": 1440, "frameRate": 25, "bitRate": 6144, "vType": "h265"}
             return ok({"Enc": {"channel": ch, "audio": 1, "mainStream": main, "subStream": sub}})
         if cmd == "GetRtspUrl":
             if nvr:
                 return err()
-            return ok({"rtspUrl": {"channel": ch, "mainStream": f"rtsp://127.0.0.1:{self.rtsp_port}/h265Preview_01_main",
-                                   "subStream": f"rtsp://127.0.0.1:{self.rtsp_port}/h264Preview_01_sub"}})
+            n = f"{ch + 1:02d}"
+            return ok({"rtspUrl": {"channel": ch, "mainStream": f"rtsp://127.0.0.1:{self.rtsp_port}/h265Preview_{n}_main",
+                                   "subStream": f"rtsp://127.0.0.1:{self.rtsp_port}/h264Preview_{n}_sub"}})
         if cmd == "GetOsd":
             return ok({"Osd": {"channel": ch, "osdChannel": {"name": f"Osd {ch}"}}})
         if cmd == "GetZoomFocus":
