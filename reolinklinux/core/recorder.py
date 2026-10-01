@@ -19,25 +19,41 @@ import time
 from pathlib import Path
 
 _FFMPEG_MAJOR: int | None = None
+_FFMPEG_LAVF: tuple[int, int] | None = None
 
 
 def ffmpeg_path() -> str | None:
     return shutil.which(os.environ.get("REOLINKLINUX_FFMPEG", "ffmpeg"))
 
 
+def _read_version() -> None:
+    global _FFMPEG_MAJOR, _FFMPEG_LAVF
+    _FFMPEG_MAJOR, _FFMPEG_LAVF = 0, (0, 0)
+    exe = ffmpeg_path()
+    if not exe:
+        return
+    try:
+        out = subprocess.run([exe, "-hide_banner", "-version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return
+    m = re.search(r"ffmpeg version n?(\d+)", out)
+    _FFMPEG_MAJOR = int(m.group(1)) if m else 7
+    m = re.search(r"libavformat\s+(\d+)\.\s*(\d+)", out)
+    if m:
+        _FFMPEG_LAVF = (int(m.group(1)), int(m.group(2)))
+
+
 def ffmpeg_major() -> int:
-    global _FFMPEG_MAJOR
     if _FFMPEG_MAJOR is None:
-        _FFMPEG_MAJOR = 0
-        exe = ffmpeg_path()
-        if exe:
-            try:
-                out = subprocess.run([exe, "-hide_banner", "-version"], capture_output=True, text=True, timeout=10)
-                m = re.search(r"ffmpeg version n?(\d+)", out.stdout)
-                _FFMPEG_MAJOR = int(m.group(1)) if m else 7
-            except (OSError, subprocess.SubprocessError):
-                _FFMPEG_MAJOR = 0
-    return _FFMPEG_MAJOR
+        _read_version()
+    return _FFMPEG_MAJOR or 0
+
+
+def ffmpeg_lavf() -> tuple[int, int]:
+    """(major, minor) of the libavformat in the ``ffmpeg`` program, (0, 0) without FFmpeg."""
+    if _FFMPEG_LAVF is None:
+        _read_version()
+    return _FFMPEG_LAVF or (0, 0)
 
 
 def safe_name(name: str) -> str:

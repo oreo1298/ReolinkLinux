@@ -90,5 +90,5 @@ def test_cameras_decode_on_cpu_unless_gpu_chosen(qapp, tmp_path):
     mgr = CameraManager(cfg)
     assert mgr.hwdec("duo") == mgr.hwdec("tm") == "no"
     cfg.settings.hwdec = "nvdec-copy"
-    mgr.entries["duo"].cfg.software_decode = True
+    mgr.entries["duo"].cfg.decoder = "no"
     assert mgr.hwdec("duo") == "no" and mgr.hwdec("tm") == "nvdec-copy"

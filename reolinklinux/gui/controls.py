@@ -813,7 +813,7 @@ class ControlPanel(QWidget):
         s = self.cameras.config.settings
         session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY") else "?")
         extra = [f"{mpv_line}; hwdec setting {s.hwdec}; protocol {s.protocol}; low latency {s.low_latency}; "
-                 f"software decoding for this camera: {e.cfg.software_decode}",
+                 f"decoder for this camera: {e.cfg.decoder or 'as in Settings'}",
                  f"display {QGuiApplication.platformName()} (session {session}); "
                  f"OpenGL {video.gl_description or 'not started yet'}"]
         local = []

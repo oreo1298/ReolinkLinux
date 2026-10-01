@@ -17,11 +17,15 @@ Reolink's line-up that has the standard HTTP(S) and RTSP interfaces.
 
 **Live view**
 - **Full quality**: the "Clear" main stream at the camera's native resolution (4K, the Duo 2's
-  4608 × 1728, 16 MP…) in H.264 or H.265 through mpv. Video is decoded on the CPU by default, because
-  GPU decoders draw coloured dots and lines over Reolink's H.265 streams on some PCs; hardware
-  decoding (VA-API on Intel/AMD, NVDEC on NVIDIA) can be switched on in Settings. With up to four videos on screen every one is shown in Clear;
-  larger grids switch to the light "Fluent" stream and a camera goes back to Clear when you enlarge
-  it. Both choices are in Settings, and per camera in the Controls panel.
+  4608 × 1728, 16 MP…) in H.264 or H.265 through mpv. With up to four videos on screen every one is
+  shown in Clear; larger grids switch to the light "Fluent" stream and a camera goes back to Clear
+  when you enlarge it. Both choices are in Settings, and per camera in the Controls panel.
+- **Smooth streams**: Reolink's RTSP server drops data under load (a TrackMix freezes every few
+  seconds), its HTTP-FLV stream does not. The app checks what each camera sends over FLV and uses
+  it when this PC can play it: H.264 always, H.265 with FFmpeg 8 or newer. Otherwise RTSP.
+- **Decoding** happens on the CPU by default, because GPU decoders drew coloured dots and lines over
+  Reolink H.265 on some PCs. Hardware decoding (NVDEC, VA-API, Vulkan) can be chosen in Settings or
+  per camera (right-click → *Video decoder*), which also shows the decoder in use.
 - A **grid** of all cameras that picks the best layout, or fixed 1 / 2×2 / 3×3 / 4×4 layouts
   with pages. **Double-click** a camera to enlarge it, and use **full screen** (F11).
 - **Digital zoom and pan**: scroll on any video to zoom in up to 8× around the mouse pointer, and
@@ -98,7 +102,7 @@ The app reads each camera's abilities and only shows the controls it supports. B
 4G cameras (Argus, Go, …) have no HTTP or RTSP of their own; add them through a Home Hub or
 NVR.
 
-## Before you start: turn on HTTPS and RTSP on the camera
+## Before you start: turn on HTTPS, RTSP and RTMP on the camera
 
 New Reolink firmware ships with some network services switched off. In the **Reolink app** (or
 Reolink Client), open the camera's **Settings → Network → Advanced → Server Settings** (called
@@ -106,7 +110,7 @@ Reolink Client), open the camera's **Settings → Network → Advanced → Serve
 
 - **HTTPS** (or HTTP), which ReolinkLinux uses for control, playback and downloads.
 - **RTSP**, which carries the live video.
-- **RTMP** (optional), only needed for the FLV stream mode in Settings.
+- **RTMP** (recommended), which carries the HTTP-FLV video: smoother than RTSP on many cameras.
 
 For an NVR, do this on the NVR itself. A dedicated user account for ReolinkLinux is a good
 idea; it needs no admin rights to view, but PTZ, lights and clock changes need an admin or a
@@ -295,7 +299,7 @@ reolinkctl -c Driveway light spotlight on --brightness 80
 reolinkctl -c Driveway recordings --date 2026-09-30
 reolinkctl -c Driveway download --date 2026-09-30 --all -o ~/Videos/driveway
 reolinkctl -c Driveway record --duration 600      # ten minutes to ./Driveway_<time>.mp4
-reolinkctl -c Driveway stream-url                 # RTSP URL for VLC, mpv, Frigate…
+reolinkctl -c Driveway stream-url                 # stream URL for VLC, mpv… (--rtsp for RTSP only)
 reolinkctl -c Driveway diagnose                   # troubleshooting report (passwords removed)
 reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (asks for the password)
 ```
@@ -305,33 +309,38 @@ reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (a
 ## Troubleshooting
 
 - **"Could not reach the Reolink API"**: HTTPS/HTTP is switched off on the camera (see
-  [Before you start](#before-you-start-turn-on-https-and-rtsp-on-the-camera)), or the address is
+  [Before you start](#before-you-start-turn-on-https-rtsp-and-rtmp-on-the-camera)), or the address is
   wrong. Check that the camera answers `ping`.
 - **The camera connects but the video says "Connection refused" or stays black**: RTSP is
   switched off on the camera. The app warns about this when it connects. Without RTSP only the
   Fluent (H.264) streams can play, over FLV; 4K cameras send their Clear stream in H.265, which
   needs RTSP.
+- **The video freezes every few seconds and smears when it does**: the camera's RTSP server is
+  dropping data. Turn on **RTMP** on the camera (see Before you start) so the app can use the
+  HTTP-FLV stream; for H.265 Clear streams that also needs FFmpeg 8 or newer (`ffmpeg -version`)
+  and recent camera firmware. **Diagnostics…** shows which stream each view plays and what the
+  camera answered over FLV.
 - **The picture is covered in coloured dots or lines**: the GPU's video decoder garbles the
-  camera's H.265 stream (seen with a Duo 2 and a TrackMix on an RTX 4090, both clean when decoded
-  on the CPU). That is why *Hardware decoding* is *Off* by default in Settings → Video. If you
-  switched it on, switch it off again, or right-click the camera and turn on **Software decoding**
-  for just that camera.
+  camera's H.265 stream (seen with a Duo 2 and a TrackMix on an RTX 4090 over RTSP, both clean on
+  the CPU). Right-click the camera → *Video decoder* → *CPU*, or set *Hardware decoding* to CPU in
+  Settings → Video. To find a GPU decoder that works, try the others in that menu one at a time;
+  *In use now* shows whether the GPU actually took over.
 - **Anything else with the video** (one lens or quality won't play, stutters, wrong picture):
   open the camera's **Device** tab and click **Diagnostics…**, or run
   `reolinkctl -c NAME diagnose`. The report lists every stream URL the app tried and what the
   camera answered, with passwords removed, so it is safe to paste into an issue.
 - **"The camera locked logins"**: too many wrong passwords. The camera accepts logins again after
   a few minutes.
-- **The 4K / Clear stream stutters or uses a lot of CPU**: open the **Device** tab; the
-  *Decoder* line should say *hardware*. Install your GPU's VA-API driver (see Installation). On
-  Fedora and openSUSE, install the full FFmpeg for H.265. On a slow computer, set the grid to
-  Fluent in Settings → Video, or turn off *Low latency*.
+- **The 4K / Clear stream uses a lot of CPU**: decoding on the CPU costs roughly one core per Clear
+  stream. Try a GPU decoder (right-click → *Video decoder*) with your GPU's VA-API or NVDEC driver
+  installed (see Installation). On Fedora and openSUSE, install the full FFmpeg for H.265. On a slow
+  computer, set the grid to Fluent in Settings → Video.
 - **Video is black in a virtual machine**: ReolinkLinux detects software OpenGL (llvmpipe) and
   switches mpv to its simple renderer. Set `REOLINKLINUX_SIMPLE_RENDERER=1` to force it on any
   other system that shows black or wrongly coloured video.
 - **Recording is greyed out or fails**: install `ffmpeg`.
-- **Passwords with `&`, `#` or `%`**: fine for everything except the optional FLV stream mode,
-  where the camera cannot read them.
+- **Passwords with `&`, `#` or `%`**: the camera cannot read them in HTTP-FLV links, so such
+  cameras stay on RTSP.
 - **Settings** are stored in `~/.config/reolinklinux/config.json`. Passwords go to the keyring
   when `python-keyring` is installed; otherwise they are kept in that file, which only your user
   can read.
@@ -347,9 +356,11 @@ reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (a
   API (`mpv.py`) drawn into Qt widgets (`video.py`), so it works the same on X11 and Wayland.
 - `reolinklinux/cli.py`: `reolinkctl`.
 
-The live stream is RTSP over TCP. The URL is found by asking the camera (`GetRtspUrl`) and checking
-the candidates with an RTSP `DESCRIBE`, because different firmware generations name their streams
-differently. A TrackMix's telephoto lens is its second stream channel (`Preview_02_main`), or the
+The live stream is HTTP-FLV when the camera sends it in a form the local FFmpeg reads
+(`core/flv.py` reads the stream's first video tag: H.264, H.265 with the legacy codec id 12 that
+FFmpeg reads since 8.0, or Enhanced FLV `hvc1` since 6.1), else RTSP over TCP. RTSP URLs are found
+by asking the camera (`GetRtspUrl`) and checking the candidates with an RTSP `DESCRIBE`, because
+different firmware generations name their streams differently. A TrackMix's telephoto lens is its second stream channel (`Preview_02_main`), or the
 `Preview_0N_autotrack` stream when the camera is connected through an NVR. Recordings are played
 through the camera's `Playback`/`Download` commands, with FLV as a fallback.
 

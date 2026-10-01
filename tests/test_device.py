@@ -73,7 +73,7 @@ def test_stream_candidates_fallbacks(duo2):
     dev = connect(duo2, probe=False)
     main = dev.stream_candidates(0, WIDE, MAIN)
     assert [u.rsplit("/", 1)[-1] for u in main] == ["h265Preview_01_main", "Preview_01_main", "h264Preview_01_main"]
-    assert not any(u.startswith("http") for u in main)      # Reolink can't send H.265 over FLV
+    assert not any(u.startswith("http") for u in main)      # H.265 over FLV only once confirmed
     sub = dev.stream_candidates(0, WIDE, SUB)
     assert sub[0].endswith("/h264Preview_01_sub") and "stream=channel0_sub.bcs" in sub[-1]
     flv = dev.stream_candidates(0, WIDE, SUB, protocol="flv")

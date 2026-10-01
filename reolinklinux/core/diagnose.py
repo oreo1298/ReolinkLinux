@@ -12,9 +12,10 @@ import platform
 import re
 import shutil
 import subprocess
+import urllib.parse
 
 from .. import __app_name__, __version__
-from . import recorder
+from . import flv, recorder
 from .device import Device
 from .models import MAIN, SUB, TELE
 
@@ -58,7 +59,10 @@ def report(dev: Device, run_ffprobe: bool = True, extra: list[str] | None = None
               f"model {info.model!r}, name {info.name!r}, type {info.device_type}, channels {info.channel_count}",
               f"firmware {info.firmware}, hardware {info.hardware}, build {info.build_day or '-'}",
               f"api {dev.client.base_url if not dev.demo else 'demo'}",
-              f"ports {json.dumps(dev.ports)}"]
+              f"ports {json.dumps(dev.ports)}",
+              f"stream protocol {getattr(dev, 'protocol', '-')}; libavformat for playback "
+              f"{'.'.join(map(str, getattr(dev, 'lavf', (0, 0))))} (H.265 over FLV needs 62.0, or 60.16 for "
+              f"Enhanced FLV)"]
     if not dev.probe_log and not dev.demo:
         dev.probe_streams()
     for ch in dev.channels:
@@ -86,6 +90,11 @@ def report(dev: Device, run_ffprobe: bool = True, extra: list[str] | None = None
                 state = "confirmed" if rec and rec.confirmed else "NOT confirmed"
                 lines.append(f"[{label}] plays {redact(chosen)} ({state})")
                 for url, result in (rec.tried if rec else []):
+                    if isinstance(result, flv.FlvProbe):
+                        stream = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("stream", ["?"])[0]
+                        note = " (too new for this FFmpeg)" if result.ok and not flv.playable(result, dev.lavf) else ""
+                        lines.append(f"    FLV {stream}: {result.describe()}{note}")
+                        continue
                     lines.append(f"    DESCRIBE {redact(url).rsplit('/', 1)[-1]}: {result.describe()}")
                     if result.challenges and not result.ok:
                         lines.append(f"      challenges: {redact('; '.join(result.challenges))}")

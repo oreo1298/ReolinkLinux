@@ -51,6 +51,7 @@ def _device(args) -> Device:
 
 def _connected(args, probe: bool = False) -> Device:
     dev = _device(args)
+    dev.lavf = recorder.ffmpeg_lavf()
     dev.connect(probe_streams=probe)
     return dev
 
@@ -138,7 +139,8 @@ def cmd_diagnose(args) -> int:
 
 def cmd_stream_url(args) -> int:
     dev = _connected(args)
-    url = dev.probe_stream(args.channel, _lens(args), SUB if args.sub else MAIN, "flv" if args.flv else "rtsp")
+    protocol = "flv" if args.flv else "rtsp" if args.rtsp else "auto"
+    url = dev.probe_stream(args.channel, _lens(args), SUB if args.sub else MAIN, protocol)
     print(url if args.show_password else _hide(url))
     dev.disconnect()
     return 0
@@ -348,7 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
     dg.add_argument("--no-ffprobe", action="store_true", help="skip opening each stream with ffprobe")
     s = cmd("stream-url", cmd_stream_url, "print the working RTSP (or FLV) URL", lens=True)
     s.add_argument("--sub", action="store_true", help="fluent (sub) stream")
-    s.add_argument("--flv", action="store_true", help="FLV over HTTP(S) instead of RTSP")
+    s.add_argument("--flv", action="store_true", help="prefer FLV over HTTP(S)")
+    s.add_argument("--rtsp", action="store_true", help="RTSP only (default: FLV when it plays, else RTSP)")
     s.add_argument("--show-password", action="store_true")
     sn = cmd("snapshot", cmd_snapshot, "save a full-resolution JPEG", lens=True)
     sn.add_argument("-o", "--output")

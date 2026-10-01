@@ -58,7 +58,7 @@ class CameraConfig:
     demo: str = ""                     # demo kind ("duo2", "trackmix", …) for simulated cameras
     hidden_channels: list[int] = field(default_factory=list)
     continuous_record: bool = False    # record the stream to disk whenever the app runs
-    software_decode: bool = False      # never use the GPU video decoder for this camera
+    decoder: str = ""                  # mpv hwdec for this camera ("no" = CPU); "" follows the setting
 
     @property
     def label(self) -> str:
@@ -70,7 +70,7 @@ class Settings:
     theme: str = "system"
     grid_quality: str = "auto"         # grid stream: auto (Clear for up to 4 videos) | main | sub
     focus_quality: str = "main"        # stream shown when one camera is enlarged
-    protocol: str = "rtsp"             # rtsp | flv
+    protocol: str = "auto"             # auto (FLV when it plays cleanly, else RTSP) | rtsp | flv
     hwdec: str = "no"                  # mpv --hwdec; GPU decoders garble Reolink H.265 (see CLAUDE.md)
     low_latency: bool = True
     grid_audio: bool = False           # play audio in the grid (otherwise only when enlarged)
@@ -158,7 +158,7 @@ class _Keyring:
 keyring = _Keyring()
 
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 
 def _migrate(settings: dict, version: int) -> None:
@@ -169,6 +169,9 @@ def _migrate(settings: dict, version: int) -> None:
     # the H.265 Clear streams of a Duo 2 and a TrackMix (RTX 4090; the CPU decodes them cleanly).
     if version < 3 and settings.get("hwdec") in ("auto-safe", "auto-copy-safe"):
         settings["hwdec"] = "no"
+    # Up to 1.0.3 RTSP was the default; Reolink's RTSP drops data (TrackMix froze every few seconds).
+    if version < 4 and settings.get("protocol") == "rtsp":
+        settings["protocol"] = "auto"
 
 
 class Config:
@@ -191,6 +194,9 @@ class Config:
             _migrate(settings, version)
         self.settings = Settings(**settings)
         cam_fields = {f for f in CameraConfig.__dataclass_fields__}
+        for c in data.get("cameras", []):
+            if isinstance(c, dict) and c.get("software_decode") and not c.get("decoder"):
+                c["decoder"] = "no"            # 1.0.1-1.0.3 had an on/off switch for software decoding
         self.cameras = [CameraConfig(**{k: v for k, v in c.items() if k in cam_fields})
                         for c in data.get("cameras", []) if isinstance(c, dict)]
         self.window = data.get("window") or {}

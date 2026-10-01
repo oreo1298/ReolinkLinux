@@ -19,7 +19,8 @@ PTZ, lights, SD-card playback and downloads, local recording (FFmpeg), plus the
   downloads), `manager.py` (CameraManager / RecordingManager / DownloadManager),
   `worker.py` (thread pool + ordered SerialQueue per camera).
 - `reolinklinux/cli.py` — `reolinkctl`.
-- `tests/fakecam.py` — fake camera (HTTP API + RTSP server with digest auth) used by the tests.
+- `reolinklinux/core/flv.py` — reads the start of an HTTP-FLV stream (codec, Enhanced FLV or not).
+- `tests/fakecam.py` — fake camera (HTTP API, HTTP-FLV, RTSP server with digest auth) used by the tests.
 
 ## Invariants / gotchas
 - Never call libmpv from its wakeup/update callbacks: they only emit Qt signals, which
@@ -33,17 +34,23 @@ PTZ, lights, SD-card playback and downloads, local recording (FFmpeg), plus the
 - TrackMix telephoto lens: on its own it is stream channel index+1 (`Preview_02_main`,
   `Snap/Search channel=1`); behind an NVR/Home Hub it is the channel's autotrack stream
   (`Preview_0N_autotrack`, `channelN_autotrack_*.bcs`, `iLogicChannel: 1`). `Device._tele_forms`
-  / `_tele_candidates` try the likely form first and fall back to the other.
-- Stream choice (`Device.probe_stream`): an unconfirmed RTSP URL beats FLV; FLV only for H.264
-  and only when RTSP is off / every path 404s. Reolink can't send H.265 over FLV. Probes run one
-  connection at a time per camera. `probe_log` feeds `core/diagnose.py` (`reolinkctl diagnose`,
-  Device tab → Diagnostics…) — ask users for that report when video misbehaves.
+  / `_tele_sets` try the likely form first and fall back to the other.
+- Stream choice (`Device.probe_stream`, protocol `auto` by default): Reolink's RTSP drops data under
+  load (a real TrackMix froze every few seconds), its HTTP-FLV doesn't. So FLV wins when `flv.probe`
+  sees video that `Device.lavf` (libavformat of libmpv and of the ffmpeg CLI, the lower) can demux:
+  H.264 always; H.265 legacy codec id 12 needs lavf 62 (FFmpeg 8), Enhanced FLV `hvc1` lavf 60.16.
+  Otherwise RTSP (DESCRIBE-confirmed, else unconfirmed RTSP); unconfirmed H.265 is never sent to
+  FLV. Probes run one connection at a time per camera. `probe_log` feeds `core/diagnose.py`
+  (`reolinkctl diagnose`, Device tab → Diagnostics…) — ask users for that report when video misbehaves.
+- Never use `fflags=+nobuffer` for live mpv players: it discards the packets read during stream
+  analysis, the first keyframe among them (broken frames until the next keyframe; H.264 FLV never
+  started). `demuxer-lavf-analyzeduration=0.5` is the latency knob instead (measured).
 - Default `hwdec` is `no` (CPU): NVDEC on an RTX 4090 drew coloured dots and black lines over the
-  H.265 Clear streams of a real Duo 2 *and* TrackMix, zero-copy and copy-back alike, while CPU
-  decoding was clean. Hardware decoding is opt-in (Settings → Video); per-camera `software_decode`
-  (`CameraManager.hwdec`) overrides it. Live low-latency caps `vd-lavc-threads` at 4: every CPU
-  decoding thread adds a frame of delay. Config migrations live in `config._migrate` (bump
-  `CONFIG_VERSION`).
+  H.265 Clear streams (RTSP) of a real Duo 2 *and* TrackMix, zero-copy and copy-back alike, while
+  CPU decoding was clean. Hardware decoding is opt-in (Settings → Video); `CameraConfig.decoder`
+  (right-click → Video decoder, `CameraManager.hwdec`) overrides it per camera. Live low-latency
+  caps `vd-lavc-threads` at 4: every CPU decoding thread adds a frame of delay. Config migrations
+  live in `config._migrate` (bump `CONFIG_VERSION`).
 - Credentials never go into logs or error text: see `_clean_error` / `_redact` / `_hide`.
 - The GUI shares the EZP2019Linux / FirmwareLab design system (`theme.py`, `icons.py`,
   `widgets.py`); keep it visually consistent with those apps.

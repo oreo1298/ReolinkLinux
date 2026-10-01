@@ -170,6 +170,23 @@ def load_error() -> str:
         return str(exc)
 
 
+def libavformat_version() -> tuple[int, int]:
+    """(major, minor) of the libavformat libmpv uses to open streams; (0, 0) if unknown."""
+    try:
+        library()
+        with open("/proc/self/maps", encoding="utf-8", errors="replace") as fh:
+            paths = {line.split()[-1] for line in fh if "/libavformat.so" in line}
+    except OSError:
+        return 0, 0
+    for path in sorted(paths):
+        try:
+            v = ctypes.CDLL(path).avformat_version()
+        except (OSError, AttributeError):
+            continue
+        return (v >> 16) & 0xFF, (v >> 8) & 0xFF
+    return 0, 0
+
+
 def api_version() -> tuple[int, int]:
     v = library().mpv_client_api_version()
     return (v >> 16) & 0xFFFF, v & 0xFFFF

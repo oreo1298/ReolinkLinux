@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
-from . import rtsp
+from . import flv, rtsp
 from .api import Client, check, ok
 from .errors import ApiError, NotSupported, ReolinkError
 from .models import MAIN, SUB, TELE, WIDE, Capabilities, Channel, DeviceInfo, Preset, Recording, StreamInfo
@@ -29,6 +29,7 @@ PTZ_OPS = PTZ_DIRECTIONS + ("ZoomInc", "ZoomDec", "FocusInc", "FocusDec", "Auto"
 # Model-name fragments of dual-lens tracking cameras (wide + telephoto streams).
 TELEPHOTO_MODELS = ("trackmix", "rlc-81ma", "rlc81ma")
 
+PROTOCOL_AUTO = "auto"   # HTTP-FLV when the camera sends it in a form this PC plays, else RTSP
 PROTOCOL_RTSP = "rtsp"
 PROTOCOL_FLV = "flv"
 
@@ -39,7 +40,7 @@ class ProbeRecord:
 
     chosen: str
     confirmed: bool
-    tried: list[tuple[str, rtsp.DescribeResult]]
+    tried: list[tuple[str, rtsp.DescribeResult | flv.FlvProbe]]
 
 
 def _ver(abilities: dict, key: str, default: int = 0) -> int:
@@ -80,6 +81,11 @@ class Device:
         self.clock: dt.datetime | None = None
         self.clock_read_at: dt.datetime | None = None
         self.connected = False
+        self.protocol = PROTOCOL_AUTO
+        # (major, minor) of the libavformat that plays and records the streams: whether it
+        # reads H.265 over FLV (see flv.py). Unknown (0, 0) keeps H.265 on RTSP.
+        self.lavf: tuple[int, int] = (0, 0)
+        self._flv_ok: dict[tuple[int, int, str], str] = {}   # FLV URLs confirmed playable
         self._stream_urls: dict[tuple[int, int, str, str], str] = {}
         self.probe_log: dict[tuple[int, int, str], ProbeRecord] = {}
         self._codecs: dict[tuple[int, int, str], str] = {}
@@ -421,31 +427,47 @@ class Device:
         return "h265" if quality == MAIN and ch.caps.main_h265 else "h264"
 
     def stream_candidates(self, index: int, lens: int = WIDE, quality: str = MAIN,
-                          protocol: str = PROTOCOL_RTSP) -> list[str]:
+                          protocol: str | None = None) -> list[str]:
         """Stream URLs to try, best guess first.
 
-        FLV (HTTP) is only offered for H.264 streams: Reolink cannot send H.265 over FLV,
-        so the Clear stream of 4K cameras (Duo 2, TrackMix, RLC-8xx…) is RTSP only.
+        An FLV URL that ``probe_stream`` confirmed playable comes first (Reolink's RTSP drops
+        data under load, its FLV does not). Unconfirmed H.265 is never offered over FLV:
+        older firmware cannot send it and FFmpeg before 8.0 cannot read Reolink's form.
         """
-        ch = self.channel(index)
-        if lens == TELE:
-            urls = self._tele_candidates(ch, quality, protocol)
+        protocol = protocol or self.protocol
+        key = (index, lens, quality)
+        rtsp_urls, flv_urls = self._stream_sets(index, lens, quality)
+        good = self._flv_ok.get(key) if protocol != PROTOCOL_RTSP else None
+        if self.expected_codec(index, lens, quality) == "h265" and not good:
+            flv_urls = []
+        if good:
+            urls = [good] + rtsp_urls + flv_urls
+        elif protocol == PROTOCOL_FLV or self._flv_preferred(lens, quality):
+            urls = flv_urls + rtsp_urls
         else:
-            cc = f"{index + 1:02d}"
-            base = self._rtsp_base()
-            enc = self.expected_codec(index, lens, quality)
-            other = "h264" if enc == "h265" else "h265"
-            reported = ch.rtsp_main if quality == MAIN else ch.rtsp_sub
-            rtsp_urls = ([self._with_credentials(reported)] if reported else []) + [
-                f"{base}/{enc}Preview_{cc}_{quality}", f"{base}/Preview_{cc}_{quality}",
-                f"{base}/{other}Preview_{cc}_{quality}"]
-            flv = [self._flv_url(f"channel{index}_{quality}.bcs")]
-            urls = flv + rtsp_urls if protocol == PROTOCOL_FLV else rtsp_urls + flv
-        if self.expected_codec(index, lens, quality) == "h265":
-            urls = [u for u in urls if not u.startswith("http")]
+            urls = rtsp_urls + flv_urls
         return list(dict.fromkeys(urls))
 
-    def _tele_candidates(self, ch: Channel, quality: str, protocol: str) -> list[str]:
+    def _flv_preferred(self, lens: int, quality: str) -> bool:
+        # An NVR's telephoto sub stream only works reliably over FLV.
+        return self.is_nvr and lens == TELE and quality == SUB
+
+    def _stream_sets(self, index: int, lens: int, quality: str) -> tuple[list[str], list[str]]:
+        """(RTSP URLs, FLV URLs) of one stream, likeliest first."""
+        ch = self.channel(index)
+        if lens == TELE:
+            return self._tele_sets(ch, quality)
+        cc = f"{index + 1:02d}"
+        base = self._rtsp_base()
+        enc = self.expected_codec(index, lens, quality)
+        other = "h264" if enc == "h265" else "h265"
+        reported = ch.rtsp_main if quality == MAIN else ch.rtsp_sub
+        rtsp_urls = ([self._with_credentials(reported)] if reported else []) + [
+            f"{base}/{enc}Preview_{cc}_{quality}", f"{base}/Preview_{cc}_{quality}",
+            f"{base}/{other}Preview_{cc}_{quality}"]
+        return list(dict.fromkeys(rtsp_urls)), [self._flv_url(f"channel{index}_{quality}.bcs")]
+
+    def _tele_sets(self, ch: Channel, quality: str) -> tuple[list[str], list[str]]:
         """Telephoto-lens streams. A TrackMix on its own serves them as the next channel
         (``Preview_02_main``); behind an NVR or Home Hub they are the camera channel's
         "autotrack" streams (the next NVR channel is another camera)."""
@@ -453,8 +475,7 @@ class Device:
         autotrack = f"{base}/Preview_{ch.index + 1:02d}_autotrack" + ("" if quality == MAIN else "_sub")
         flv_auto = self._flv_url(f"channel{ch.index}_autotrack_{quality}.bcs")
         if self.is_nvr:
-            # The FLV form is the reliable one for the telephoto sub stream.
-            return [flv_auto, autotrack] if quality == SUB or protocol == PROTOCOL_FLV else [autotrack, flv_auto]
+            return [autotrack], [flv_auto]
         nc = f"{ch.index + 2:02d}"
         info = ch.tele_main if quality == MAIN else ch.tele_sub
         default = "h265" if quality == MAIN and ch.caps.main_h265 else "h264"
@@ -464,9 +485,7 @@ class Device:
         rtsp_urls = ([self._with_credentials(reported)] if reported else []) + [
             f"{base}/{enc}Preview_{nc}_{quality}", f"{base}/Preview_{nc}_{quality}",
             f"{base}/{other}Preview_{nc}_{quality}", autotrack]
-        flv = [self._flv_url(f"channel{ch.index + 1}_{quality}.bcs"), flv_auto]
-        ordered = flv + rtsp_urls if protocol == PROTOCOL_FLV else rtsp_urls + flv
-        return list(dict.fromkeys(ordered))
+        return list(dict.fromkeys(rtsp_urls)), [self._flv_url(f"channel{ch.index + 1}_{quality}.bcs"), flv_auto]
 
     def _tele_forms(self, index: int) -> list[tuple[int, dict]]:
         """(channel, extra parameters) addressing the telephoto lens in Snap/Search, likely first."""
@@ -474,7 +493,8 @@ class Device:
         return [logical] if self.is_nvr else [direct, logical]
 
     def stream_url(self, index: int, lens: int = WIDE, quality: str = MAIN,
-                   protocol: str = PROTOCOL_RTSP) -> str:
+                   protocol: str | None = None) -> str:
+        protocol = protocol or self.protocol
         key = (index, lens, quality, protocol)
         with self._lock:
             cached = self._stream_urls.get(key)
@@ -485,23 +505,38 @@ class Device:
     def stream_codec(self, index: int, lens: int, quality: str) -> str:
         return self._codecs.get((index, lens, quality), "")
 
-    def probe_stream(self, index: int, lens: int, quality: str, protocol: str = PROTOCOL_RTSP) -> str:
-        """Pick the URL to play: the first RTSP URL the camera confirms (DESCRIBE); cache it.
+    def probe_stream(self, index: int, lens: int, quality: str, protocol: str | None = None) -> str:
+        """Pick the URL to play and cache it.
 
-        When no URL can be confirmed (the check itself can fail on some firmware) an RTSP
-        URL is still preferred; FLV is used only for H.264 streams, when RTSP is switched
-        off on the camera or every RTSP path was answered "not found".
+        Unless RTSP was asked for, the FLV stream comes first when it carries video this PC
+        can play (``flv.probe``: H.264, or H.265 with a recent FFmpeg). Otherwise the first
+        RTSP URL the camera confirms (DESCRIBE). When nothing can be confirmed (the check
+        itself fails on some firmware) an RTSP URL is still preferred; H.264 over FLV is the
+        fallback when RTSP is switched off or every RTSP path was answered "not found".
         """
+        protocol = protocol or self.protocol
         key = (index, lens, quality)
-        candidates = self.stream_candidates(index, lens, quality, protocol)
-        rtsp_urls = [u for u in candidates if u.startswith("rtsp://")]
-        http_urls = [u for u in candidates if u.startswith("http")]
-        results: list[tuple[str, rtsp.DescribeResult]] = []
+        rtsp_urls, flv_urls = self._stream_sets(index, lens, quality)
+        results: list[tuple[str, rtsp.DescribeResult | flv.FlvProbe]] = []
         chosen, confirmed = "", False
-        if candidates and candidates[0].startswith("http"):
-            # FLV first by design: the FLV setting, or an NVR's telephoto sub stream.
-            chosen = candidates[0]
-        else:
+        try_flv = (protocol != PROTOCOL_RTSP or self._flv_preferred(lens, quality)) and \
+            self.ports.get("rtmp_enabled", True)
+        if try_flv and self.expected_codec(index, lens, quality) == "h265" and self.lavf < flv.LAVF_HEVC_ENHANCED:
+            try_flv = False                     # this FFmpeg reads no form of H.265 over FLV
+        for url in flv_urls if try_flv else []:
+            found = flv.probe(url, timeout=5)
+            results.append((url, found))
+            if found.ok and flv.playable(found, self.lavf):
+                chosen, confirmed = url, True
+                self._codecs[key] = found.codec
+                break
+        with self._lock:
+            if chosen:
+                self._flv_ok[key] = chosen
+            else:
+                self._flv_ok.pop(key, None)
+        http_urls = [u for u in self.stream_candidates(index, lens, quality, protocol) if u.startswith("http")]
+        if not chosen:
             rtsp_off = not self.ports.get("rtsp_enabled", True)
             if not rtsp_off:
                 for url in rtsp_urls:
@@ -516,12 +551,13 @@ class Device:
                         rtsp_off = True
                         break
             if not chosen:
-                all_missing = bool(results) and all(r.status in (404, 454) for _u, r in results)
-                if http_urls and (rtsp_off or all_missing):
+                described = [(u, r) for u, r in results if u.startswith("rtsp://")]
+                all_missing = bool(described) and all(r.status in (404, 454) for _u, r in described)
+                if http_urls and (rtsp_off or all_missing or self._flv_preferred(lens, quality)):
                     chosen = http_urls[0]
                 else:
-                    unanswered = [u for u, r in results if r.status not in (404, 454)]
-                    chosen = (unanswered or rtsp_urls or candidates)[0]
+                    unanswered = [u for u, r in described if r.status not in (404, 454)]
+                    chosen = (unanswered or rtsp_urls or http_urls)[0]
         with self._lock:
             self._stream_urls[(index, lens, quality, protocol)] = chosen
             self.probe_log[key] = ProbeRecord(chosen, confirmed, [(u, r) for u, r in results])
@@ -543,9 +579,9 @@ class Device:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(probe, jobs))
 
-    def forget_stream(self, index: int, lens: int, quality: str, protocol: str = PROTOCOL_RTSP) -> None:
+    def forget_stream(self, index: int, lens: int, quality: str, protocol: str | None = None) -> None:
         with self._lock:
-            self._stream_urls.pop((index, lens, quality, protocol), None)
+            self._stream_urls.pop((index, lens, quality, protocol or self.protocol), None)
 
     # ------------------------------------------------------------------ PTZ
     def ptz(self, index: int, op: str, speed: int | None = None, preset_id: int | None = None) -> None:

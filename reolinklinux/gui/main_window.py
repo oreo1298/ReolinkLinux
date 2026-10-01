@@ -31,7 +31,7 @@ from ..core.config import CameraConfig, Config
 from ..core.models import MAIN, SUB, TELE
 from . import mpv, worker
 from .controls import ControlPanel
-from .dialogs import AboutDialog, CameraDialog, SettingsDialog
+from .dialogs import DECODERS, AboutDialog, CameraDialog, SettingsDialog
 from .live import CameraList, VideoWall
 from .manager import CameraManager, DownloadManager, RecordingManager, Source
 from .playback import PlaybackPage
@@ -570,11 +570,8 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("Reconnect", lambda: self.wall.reload(source))
         e = self.cameras.entry(source.cam_id)
-        if e and not e.cfg.demo and self.config.settings.hwdec != "no":
-            soft = menu.addAction("Software decoding (fixes coloured dots or lines)")
-            soft.setCheckable(True)
-            soft.setChecked(e.cfg.software_decode)
-            soft.toggled.connect(lambda on, cid=source.cam_id: self._set_software_decode(cid, on))
+        if e and not e.cfg.demo:
+            self._decoder_menu(menu, e.cfg, tile)
         menu.addAction("Recordings on the camera…", lambda: (self.select_view(source.cam_id, source.channel),
                                                              self.show_page(1)))
         menu.addAction("Edit camera…", lambda: self.edit_camera(source.cam_id))
@@ -608,14 +605,33 @@ class MainWindow(QMainWindow):
         menu.addAction("Remove…", lambda: self.remove_camera(cam_id))
         menu.exec(pos)
 
-    def _set_software_decode(self, cam_id: str, on: bool) -> None:
+    def _decoder_menu(self, menu: QMenu, cfg: CameraConfig, tile) -> None:
+        """Per-camera decoder, to try GPU decoders one by one against a camera's streams."""
+        labels = dict(DECODERS)
+        sub = menu.addMenu("Video decoder")
+        current = tile.video.player.get_string("hwdec-current") if tile and tile.video.player else None
+        if current:
+            info = sub.addAction(f"In use now: {'CPU' if current == 'no' else current}")
+            info.setEnabled(False)
+            sub.addSeparator()
+        group = QActionGroup(sub)
+        setting = self.config.settings.hwdec
+        for value, label in (("", f"As in Settings ({labels.get(setting, setting)})"), *DECODERS):
+            act = sub.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(cfg.decoder == value)
+            group.addAction(act)
+            act.triggered.connect(lambda _on, cid=cfg.id, v=value: self._set_decoder(cid, v))
+
+    def _set_decoder(self, cam_id: str, decoder: str) -> None:
         e = self.cameras.entry(cam_id)
-        if not e:
+        if not e or e.cfg.decoder == decoder:
             return
-        e.cfg.software_decode = on
+        e.cfg.decoder = decoder
         self.config.save()
         self.wall.apply_settings(cam_id)
-        self.show_message(f"{e.cfg.label}: {'software' if on else 'hardware'} video decoding", "info")
+        label = dict(DECODERS).get(self.cameras.hwdec(cam_id), self.cameras.hwdec(cam_id))
+        self.show_message(f"{e.cfg.label}: video decoder {label}", "info")
 
     def _set_continuous(self, cam_id: str, on: bool) -> None:
         e = self.cameras.entry(cam_id)

@@ -86,12 +86,14 @@ class VideoWidget(QOpenGLWidget):
             "demuxer-lavf-o-add": "reconnect=1", "force-seekable": "yes",
         }
         if self.live:
-            opts.update({"cache": "no" if low_latency else "yes", "demuxer-lavf-analyzeduration": 1.0,
+            # Keep what the stream analysis reads: "fflags=+nobuffer" dropped those packets, the
+            # first keyframe among them (damaged picture until the next keyframe; H.264 over FLV
+            # never started). Half a second of analysis is enough for Reolink streams.
+            opts.update({"cache": "no" if low_latency else "yes", "demuxer-lavf-analyzeduration": 0.5,
                          "video-latency-hacks": "yes" if low_latency else "no", "untimed": "no",
                          "demuxer-readahead-secs": 0.5 if low_latency else 2, "audio-buffer": 0.2,
                          "interpolation": "no"})
             if low_latency:
-                opts["demuxer-lavf-o"] = "fflags=+nobuffer"
                 # Each extra CPU decoding thread delays the picture by one frame (16 threads: ~0.8 s).
                 opts["vd-lavc-threads"] = min(4, os.cpu_count() or 4)
         else:

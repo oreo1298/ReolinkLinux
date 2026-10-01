@@ -69,6 +69,10 @@ class FakeCamera:
         self.rtsp_auth = "digest"
         self.rtsp_requests: list[tuple[str, str]] = []
         self.rtsp_enabled = 1
+        self.rtmp_enabled = 1
+        # HTTP-FLV streams served: name -> "h264" | "hevc" (legacy codec id 12) | "hvc1" (Enhanced FLV)
+        self.flv_streams: dict[str, str] = {}
+        self.flv_requests: list[str] = []
         self.lock = threading.Lock()
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.http.daemon_threads = True
@@ -163,7 +167,7 @@ class FakeCamera:
             return ok({"Ability": {"GetWhiteLed": _ab(1), "rtsp": _ab(3), "abilityChn": chans}})
         if cmd == "GetNetPort":
             return ok({"NetPort": {"httpEnable": 1, "httpPort": 80, "httpsEnable": 1, "httpsPort": 443,
-                                   "mediaPort": 9000, "onvifEnable": 1, "onvifPort": 8000, "rtmpEnable": 1,
+                                   "mediaPort": 9000, "onvifEnable": 1, "onvifPort": 8000, "rtmpEnable": self.rtmp_enabled,
                                    "rtmpPort": 1935, "rtspEnable": self.rtsp_enabled, "rtspPort": self.rtsp_port}})
         if cmd == "GetLocalLink":
             return ok({"LocalLink": {"mac": "ec:71:db:12:34:56"}})
@@ -265,6 +269,18 @@ class FakeCamera:
 
             def _serve(self, body):
                 parts = urllib.parse.urlsplit(self.path)
+                if parts.path == "/flv":
+                    q = dict(urllib.parse.parse_qsl(parts.query))
+                    cam.flv_requests.append(q.get("stream", ""))
+                    form = cam.flv_streams.get(q.get("stream", ""))
+                    if not form or q.get("password") != cam.password:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/x-flv")
+                    self.end_headers()
+                    self.wfile.write(flv_bytes(form))
+                    return
                 if parts.path != "/cgi-bin/api.cgi":
                     self.send_error(404)
                     return
@@ -287,6 +303,20 @@ class FakeCamera:
                 self._serve(body)
 
         return Handler
+
+
+def _flv_tag(kind: int, body: bytes) -> bytes:
+    return bytes([kind]) + len(body).to_bytes(3, "big") + b"\0\0\0\0" + b"\0\0\0" + body + \
+        (11 + len(body)).to_bytes(4, "big")
+
+
+def flv_bytes(form: str) -> bytes:
+    """The start of a Reolink-style FLV stream: metadata, audio config, video config."""
+    video = {"h264": b"\x17\x00\x00\x00\x00\x01\x64",          # keyframe, AVC (codec id 7)
+             "hevc": b"\x1c\x00\x00\x00\x00\x01\x01",          # keyframe, codec id 12
+             "hvc1": b"\x90hvc1\x01\x01"}[form]                   # Enhanced FLV sequence start
+    return (b"FLV\x01\x05\x00\x00\x00\x09" + b"\0\0\0\0" + _flv_tag(18, b"\x02\x00\x0aonMetaData")
+            + _flv_tag(8, b"\xaf\x00\x14\x08") + _flv_tag(9, video))
 
 
 class _RtspServer(socketserver.ThreadingTCPServer):

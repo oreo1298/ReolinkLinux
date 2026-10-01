@@ -61,3 +61,21 @@ def test_gpu_decoding_default_of_1_0_1_is_migrated(tmp_path):
     path.write_text('{"version": 2, "settings": {"hwdec": "auto-copy-safe", "grid_quality": "sub"}}')
     cfg = Config(path)
     assert cfg.settings.hwdec == "no" and cfg.settings.grid_quality == "sub"
+
+
+def test_rtsp_default_of_1_0_3_becomes_automatic(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text('{"version": 3, "settings": {"protocol": "rtsp", "hwdec": "auto-copy-safe"}}')
+    cfg = Config(path)
+    assert cfg.settings.protocol == "auto" and cfg.settings.hwdec == "auto-copy-safe"
+    cfg.settings.protocol = "rtsp"
+    cfg.save()
+    assert Config(path).settings.protocol == "rtsp"
+
+
+def test_software_decoding_switch_becomes_a_decoder_choice(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text('{"version": 3, "cameras": [{"id": "a", "host": "h", "software_decode": true}, '
+                    '{"id": "b", "host": "i"}]}')
+    cfg = Config(path)
+    assert [c.decoder for c in cfg.cameras] == ["no", ""]

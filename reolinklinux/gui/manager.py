@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import itertools
 import os
 import threading
@@ -63,6 +64,16 @@ def friendly_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+@functools.lru_cache(maxsize=1)
+def playback_lavf() -> tuple[int, int]:
+    """libavformat version that must read the streams: libmpv's, and FFmpeg's for recording."""
+    from . import mpv
+    versions = [mpv.libavformat_version()]
+    if rec_mod.ffmpeg_path():
+        versions.append(rec_mod.ffmpeg_lavf())
+    return min(versions)
+
+
 class CameraManager(QObject):
     cameras_changed = Signal()          # cameras added / removed / reordered
     camera_changed = Signal(str)        # status or details of one camera changed
@@ -100,9 +111,9 @@ class CameraManager(QObject):
         return next((c for c in dev.channels if c.index == index), None)
 
     def hwdec(self, cam_id: str) -> str:
-        """mpv ``hwdec`` for this camera's videos: the setting, unless software decoding is forced for it."""
+        """mpv ``hwdec`` for this camera's videos: its own choice, else the setting."""
         e = self.entries.get(cam_id)
-        return "no" if e and e.cfg.software_decode else self.config.settings.hwdec
+        return (e.cfg.decoder if e else "") or self.config.settings.hwdec
 
     def label(self, cam_id: str, index: int = 0) -> str:
         e = self.entries.get(cam_id)
@@ -140,7 +151,10 @@ class CameraManager(QObject):
     def _make_device(self, cfg: CameraConfig) -> Device:
         if cfg.demo:
             return DemoDevice(cfg.demo)
-        return Device(cfg.host, cfg.username, self.config.password(cfg), cfg.port, cfg.https)
+        dev = Device(cfg.host, cfg.username, self.config.password(cfg), cfg.port, cfg.https)
+        dev.protocol = self.config.settings.protocol
+        dev.lavf = playback_lavf()
+        return dev
 
     def connect_all(self) -> None:
         for e in self.ordered():
@@ -184,6 +198,9 @@ class CameraManager(QObject):
             self.notify.emit(f"{e.cfg.label}: RTSP is switched off on the camera, so only Fluent video can play. "
                              "Turn it on in the Reolink app: Settings → Network → Advanced → Server Settings.",
                              "warning")
+        elif not device.demo and not device.ports.get("rtmp_enabled", True) and self.config.settings.protocol != "rtsp":
+            self.notify.emit(f"{e.cfg.label}: turn on RTMP in the Reolink app (Settings → Network → Advanced → "
+                             "Server Settings) for smoother video: it carries the HTTP-FLV stream.", "info")
 
     def _connect_failed(self, cam_id: str, exc: Exception) -> None:
         e = self.entries.get(cam_id)

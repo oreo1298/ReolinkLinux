@@ -37,7 +37,21 @@ from .widgets import bind_icon, scaled_font
 
 ENABLE_PORTS_HELP = ("The camera must have its HTTP or HTTPS port and its RTSP port turned on. In the Reolink app "
                      "open the camera's Settings → Network → Advanced → Server settings (called Port settings on "
-                     "some models) and switch on HTTPS (or HTTP) and RTSP.")
+                     "some models) and switch on HTTPS (or HTTP), RTSP and RTMP (RTMP carries the HTTP-FLV "
+                     "video, which is smoother than RTSP on many Reolink cameras).")
+
+
+# Video decoders offered in Settings and per camera (mpv ``hwdec`` values). "no" decodes on the CPU.
+DECODERS = (
+    ("no", "CPU (software decoding)"),
+    ("auto-copy-safe", "GPU, automatic"),
+    ("auto-safe", "GPU, automatic, zero-copy"),
+    ("nvdec-copy", "NVDEC, copy back (NVIDIA)"),
+    ("nvdec", "NVDEC, zero-copy (NVIDIA)"),
+    ("vaapi-copy", "VA-API, copy back (Intel / AMD)"),
+    ("vaapi", "VA-API, zero-copy (Intel / AMD)"),
+    ("vulkan-copy", "Vulkan, copy back (any recent GPU)"),
+)
 
 
 def _muted(text: str, wrap: bool = True) -> QLabel:
@@ -123,9 +137,18 @@ class CameraDialog(QDialog):
         self.continuous = QCheckBox("Record continuously to this PC while ReolinkLinux is running")
         self.continuous.setChecked(self.cfg.continuous_record)
         lay.addWidget(self.continuous)
-        self.software = QCheckBox("Software decoding (use if the picture shows coloured dots or lines)")
-        self.software.setChecked(self.cfg.software_decode)
-        lay.addWidget(self.software)
+        decoder_row = QFormLayout()
+        self.decoder = QComboBox()
+        self.decoder.addItem("As in Settings → Video", "")
+        for value, label in DECODERS:
+            self.decoder.addItem(label, value)
+        idx = self.decoder.findData(self.cfg.decoder)
+        if idx < 0:
+            self.decoder.addItem(self.cfg.decoder, self.cfg.decoder)
+            idx = self.decoder.count() - 1
+        self.decoder.setCurrentIndex(idx)
+        decoder_row.addRow("Video decoder", self.decoder)
+        lay.addLayout(decoder_row)
 
         help_box = QLabel(ENABLE_PORTS_HELP)
         help_box.setObjectName("Banner")
@@ -196,7 +219,7 @@ class CameraDialog(QDialog):
         cfg.https = self.scheme.currentData()
         cfg.port = self.port.value() or None
         cfg.continuous_record = self.continuous.isChecked()
-        cfg.software_decode = self.software.isChecked()
+        cfg.decoder = self.decoder.currentData()
         password = self.password.text()
         if self.editing and not password and self.password.placeholderText() == "Unchanged":
             return cfg, None
@@ -315,17 +338,16 @@ class SettingsDialog(QDialog):
         self.focus_quality.setCurrentIndex(max(0, self.focus_quality.findData(s.focus_quality)))
         v.addRow("Enlarged camera", self.focus_quality)
         self.protocol = QComboBox()
-        self.protocol.addItem("RTSP (recommended; H.264 and H.265)", "rtsp")
-        self.protocol.addItem("FLV over HTTP(S) (H.264 streams only)", "flv")
+        self.protocol.addItem("Automatic (recommended): HTTP-FLV when the camera sends it, else RTSP", "auto")
+        self.protocol.addItem("RTSP only", "rtsp")
+        self.protocol.addItem("FLV over HTTP(S) first", "flv")
         self.protocol.setCurrentIndex(max(0, self.protocol.findData(s.protocol)))
         v.addRow("Stream protocol", self.protocol)
         self.hwdec = QComboBox()
-        for label, value in (("Off: decode on the CPU (recommended; clean picture from every camera)", "no"),
-                             ("Automatic (less CPU; can draw coloured dots over Reolink H.265)", "auto-copy-safe"),
-                             ("Automatic, zero-copy (least CPU)", "auto-safe"),
-                             ("VA-API, copy back (Intel / AMD)", "vaapi-copy"), ("NVDEC, copy back (NVIDIA)", "nvdec-copy"),
-                             ("VA-API, zero-copy", "vaapi"), ("NVDEC, zero-copy", "nvdec")):
-            self.hwdec.addItem(label, value)
+        notes = {"no": " (recommended: clean picture from every camera)",
+                 "auto-copy-safe": " (less CPU; can draw coloured dots over Reolink H.265)"}
+        for value, label in DECODERS:
+            self.hwdec.addItem(label + notes.get(value, ""), value)
         idx = self.hwdec.findData(s.hwdec)
         if idx < 0:
             self.hwdec.addItem(s.hwdec, s.hwdec)
