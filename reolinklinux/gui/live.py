@@ -418,8 +418,7 @@ class VideoWall(QFrame):
 
     def _make_tile(self, source: Source) -> VideoTile:
         s = self.config.settings
-        hwdec = "no" if self.cameras.decode_on_cpu(source.cam_id, source.channel) else s.hwdec
-        tile = VideoTile(self, live=True, hwdec=hwdec, low_latency=s.low_latency, cpu_for_large=s.cpu_decode_large)
+        tile = VideoTile(self, live=True, hwdec=self.cameras.hwdec(source.cam_id), low_latency=s.low_latency)
         tile.source = source
         tile.video.set_fill(self.fill)
         tile.video.clicked.connect(lambda src=source: self._tile_clicked(src))

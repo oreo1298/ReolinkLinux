@@ -66,12 +66,6 @@ class Capabilities:
         return self.pan_tilt or self.optical_zoom or self.presets
 
 
-# GPU video decoders garble pictures larger than 4K on many PCs: older ones stop at 4096×2304, and
-# NVDEC on an RTX 4090 drew coloured dots and black lines over a Duo 2's 4608×1728 stream that the
-# CPU decodes cleanly. Such cameras are decoded on the CPU (setting ``cpu_decode_large``).
-GPU_DECODE_MAX = (4096, 2304)
-
-
 @dataclass
 class StreamInfo:
     width: int = 0
@@ -83,10 +77,6 @@ class StreamInfo:
     @property
     def resolution(self) -> str:
         return f"{self.width}×{self.height}" if self.width and self.height else ""
-
-    @property
-    def beyond_4k(self) -> bool:
-        return self.width > GPU_DECODE_MAX[0] or self.height > GPU_DECODE_MAX[1]
 
 
 @dataclass

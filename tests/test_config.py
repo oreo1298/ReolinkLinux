@@ -49,7 +49,15 @@ def test_old_defaults_are_migrated(tmp_path):
     path = tmp_path / "c.json"
     path.write_text('{"version": 1, "settings": {"hwdec": "auto-safe", "grid_quality": "sub", "theme": "dark"}}')
     cfg = Config(path)
-    assert cfg.settings.hwdec == "auto-copy-safe" and cfg.settings.grid_quality == "auto"
-    cfg.settings.grid_quality = "sub"                       # a later, deliberate choice sticks
+    assert cfg.settings.hwdec == "no" and cfg.settings.grid_quality == "auto"
+    cfg.settings.grid_quality = "sub"                       # later, deliberate choices stick
+    cfg.settings.hwdec = "nvdec-copy"
     cfg.save()
-    assert Config(path).settings.grid_quality == "sub"
+    assert Config(path).settings.grid_quality == "sub" and Config(path).settings.hwdec == "nvdec-copy"
+
+
+def test_gpu_decoding_default_of_1_0_1_is_migrated(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text('{"version": 2, "settings": {"hwdec": "auto-copy-safe", "grid_quality": "sub"}}')
+    cfg = Config(path)
+    assert cfg.settings.hwdec == "no" and cfg.settings.grid_quality == "sub"

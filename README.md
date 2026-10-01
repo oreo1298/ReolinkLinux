@@ -17,9 +17,9 @@ Reolink's line-up that has the standard HTTP(S) and RTSP interfaces.
 
 **Live view**
 - **Full quality**: the "Clear" main stream at the camera's native resolution (4K, the Duo 2's
-  4608 × 1728, 16 MP…) in H.264 or H.265, with **hardware decoding** (VA-API on Intel/AMD,
-  NVDEC on NVIDIA) through mpv; cameras larger than 4K are decoded on the CPU, because GPU decoders
-  tend to garble them. With up to four videos on screen every one is shown in Clear;
+  4608 × 1728, 16 MP…) in H.264 or H.265 through mpv. Video is decoded on the CPU by default, because
+  GPU decoders draw coloured dots and lines over Reolink's H.265 streams on some PCs; hardware
+  decoding (VA-API on Intel/AMD, NVDEC on NVIDIA) can be switched on in Settings. With up to four videos on screen every one is shown in Clear;
   larger grids switch to the light "Fluent" stream and a camera goes back to Clear when you enlarge
   it. Both choices are in Settings, and per camera in the Controls panel.
 - A **grid** of all cameras that picks the best layout, or fixed 1 / 2×2 / 3×3 / 4×4 layouts
@@ -312,11 +312,10 @@ reolinkctl --host 192.168.1.50 --user admin info  # a camera that isn't saved (a
   Fluent (H.264) streams can play, over FLV; 4K cameras send their Clear stream in H.265, which
   needs RTSP.
 - **The picture is covered in coloured dots or lines**: the GPU's video decoder garbles the
-  stream. This happens with pictures larger than 4K even on fast GPUs (NVDEC on an RTX 4090
-  garbled a Duo 2's 4608 × 1728 stream that the CPU decodes cleanly), so cameras larger than 4K
-  (Duo 2, Duo 3, 12 MP models) are decoded on the CPU automatically: *Decode cameras larger than
-  4K on the CPU* in Settings → Video. For any other camera, right-click it and turn on
-  **Software decoding**, or set *Hardware decoding* to *Off* in Settings → Video.
+  camera's H.265 stream (seen with a Duo 2 and a TrackMix on an RTX 4090, both clean when decoded
+  on the CPU). That is why *Hardware decoding* is *Off* by default in Settings → Video. If you
+  switched it on, switch it off again, or right-click the camera and turn on **Software decoding**
+  for just that camera.
 - **Anything else with the video** (one lens or quality won't play, stutters, wrong picture):
   open the camera's **Device** tab and click **Diagnostics…**, or run
   `reolinkctl -c NAME diagnose`. The report lists every stream URL the app tried and what the

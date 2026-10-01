@@ -384,7 +384,7 @@ class PlaybackPage(QWidget):
         self.clip_title.setObjectName("Muted")
         center.add_header_widget(self.clip_title)
         s = config.settings
-        self.player = VideoTile(live=False, hwdec=s.hwdec, low_latency=False, cpu_for_large=s.cpu_decode_large)
+        self.player = VideoTile(live=False, hwdec=s.hwdec, low_latency=False)
         self.player.setMinimumSize(420, 240)
         self.player.set_status("Pick a day and a recording", "info")
         self.player.video.position_changed.connect(self._position)
@@ -703,9 +703,7 @@ class PlaybackPage(QWidget):
         self.player.set_status("Loading recording…", "busy")
         self.timeline.set_playhead(rec.start + dt.timedelta(seconds=offset))
         self.player.video.set_speed(self.speed.currentData())
-        s = self.config.settings
-        self.player.video.cpu_for_large = s.cpu_decode_large
-        self.player.video.set_hwdec("no" if self.cameras.decode_on_cpu(*view) else s.hwdec)
+        self.player.video.set_hwdec(self.cameras.hwdec(view[0]))
 
         def urls():
             return dev.playback_urls(rec)

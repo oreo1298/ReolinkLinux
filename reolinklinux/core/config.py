@@ -71,8 +71,7 @@ class Settings:
     grid_quality: str = "auto"         # grid stream: auto (Clear for up to 4 videos) | main | sub
     focus_quality: str = "main"        # stream shown when one camera is enlarged
     protocol: str = "rtsp"             # rtsp | flv
-    hwdec: str = "auto-copy-safe"      # mpv --hwdec (copy-back: robust on every GPU setup)
-    cpu_decode_large: bool = True      # decode cameras larger than 4K (Duo 2, 12 MP) on the CPU
+    hwdec: str = "no"                  # mpv --hwdec; GPU decoders garble Reolink H.265 (see CLAUDE.md)
     low_latency: bool = True
     grid_audio: bool = False           # play audio in the grid (otherwise only when enlarged)
     fill_tiles: bool = False           # crop video to fill tiles instead of letterboxing
@@ -159,17 +158,17 @@ class _Keyring:
 keyring = _Keyring()
 
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 
-def _migrate(settings: dict) -> None:
+def _migrate(settings: dict, version: int) -> None:
     """Move settings that were saved with an old default to the new default."""
-    # 1.0 used zero-copy hardware decoding, which garbles video on some GPU setups.
-    if settings.get("hwdec") == "auto-safe":
-        settings["hwdec"] = "auto-copy-safe"
-    # 1.0 always showed the grid in Fluent quality.
-    if settings.get("grid_quality") == "sub":
-        settings["grid_quality"] = "auto"
+    if version < 2 and settings.get("grid_quality") == "sub":
+        settings["grid_quality"] = "auto"     # 1.0 always showed the grid in Fluent quality
+    # 1.0 and 1.0.1-1.0.2 decoded on the GPU by default, which drew coloured dots and lines over
+    # the H.265 Clear streams of a Duo 2 and a TrackMix (RTX 4090; the CPU decodes them cleanly).
+    if version < 3 and settings.get("hwdec") in ("auto-safe", "auto-copy-safe"):
+        settings["hwdec"] = "no"
 
 
 class Config:
@@ -187,8 +186,9 @@ class Config:
             return
         known = {f for f in Settings.__dataclass_fields__}
         settings = {k: v for k, v in (data.get("settings") or {}).items() if k in known}
-        if int(data.get("version", 1) or 1) < CONFIG_VERSION:
-            _migrate(settings)
+        version = int(data.get("version", 1) or 1)
+        if version < CONFIG_VERSION:
+            _migrate(settings, version)
         self.settings = Settings(**settings)
         cam_fields = {f for f in CameraConfig.__dataclass_fields__}
         self.cameras = [CameraConfig(**{k: v for k, v in c.items() if k in cam_fields})

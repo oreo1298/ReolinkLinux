@@ -813,8 +813,7 @@ class ControlPanel(QWidget):
         s = self.cameras.config.settings
         session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY") else "?")
         extra = [f"{mpv_line}; hwdec setting {s.hwdec}; protocol {s.protocol}; low latency {s.low_latency}; "
-                 f"software decoding for this camera: {e.cfg.software_decode}; "
-                 f"larger than 4K on the CPU: {s.cpu_decode_large}",
+                 f"software decoding for this camera: {e.cfg.software_decode}",
                  f"display {QGuiApplication.platformName()} (session {session}); "
                  f"OpenGL {video.gl_description or 'not started yet'}"]
         local = []
@@ -826,8 +825,7 @@ class ControlPanel(QWidget):
             local.append(f"[{'tele' if tile.source.lens else 'wide'} {self.wall.tile_quality.get(key, '?')}] "
                          f"{'playing' if v.has_frame else 'no picture'}: {diagnose.redact(v.current_url())}")
             if st:
-                decoder = st["hwdec"] + (" (larger than 4K: CPU)" if st["large_on_cpu"] else "")
-                local.append(f"    {st['width']}x{st['height']} {st['codec']}, decoder {decoder}, "
+                local.append(f"    {st['width']}x{st['height']} {st['codec']}, decoder {st['hwdec']}, "
                              f"{st['fps']:.1f} fps, dropped {st['dropped']}, damaged frames {st['errors']}")
             if v.error or tile.overlay.status:
                 local.append(f"    last error: {diagnose.redact(v.error or tile.overlay.status)}")

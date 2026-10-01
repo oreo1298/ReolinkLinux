@@ -99,15 +99,10 @@ class CameraManager(QObject):
             return None
         return next((c for c in dev.channels if c.index == index), None)
 
-    def decode_on_cpu(self, cam_id: str, index: int) -> bool:
-        """Software decoding for this view: chosen for the camera, or automatic when it is larger than 4K."""
+    def hwdec(self, cam_id: str) -> str:
+        """mpv ``hwdec`` for this camera's videos: the setting, unless software decoding is forced for it."""
         e = self.entries.get(cam_id)
-        if not e:
-            return False
-        if e.cfg.software_decode:
-            return True
-        ch = self.channel(cam_id, index)
-        return bool(self.config.settings.cpu_decode_large and ch and ch.main.beyond_4k)
+        return "no" if e and e.cfg.software_decode else self.config.settings.hwdec
 
     def label(self, cam_id: str, index: int = 0) -> str:
         e = self.entries.get(cam_id)
