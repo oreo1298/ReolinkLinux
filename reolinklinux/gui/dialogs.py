@@ -332,6 +332,9 @@ class SettingsDialog(QDialog):
             idx = self.hwdec.count() - 1
         self.hwdec.setCurrentIndex(idx)
         v.addRow("Hardware decoding", self.hwdec)
+        self.cpu_large = QCheckBox("Decode cameras larger than 4K on the CPU (Duo 2, 12 MP; GPUs often garble them)")
+        self.cpu_large.setChecked(s.cpu_decode_large)
+        v.addRow("", self.cpu_large)
         self.low_latency = QCheckBox("Low latency (smallest delay; turn off if video stutters)")
         self.low_latency.setChecked(s.low_latency)
         v.addRow("", self.low_latency)
@@ -404,6 +407,7 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         s = self.config.settings
         self.video_changed = (s.hwdec != self.hwdec.currentData() or s.low_latency != self.low_latency.isChecked()
+                              or s.cpu_decode_large != self.cpu_large.isChecked()
                               or s.protocol != self.protocol.currentData())
         s.theme = self.theme.currentData()
         s.show_detection = self.show_detection.isChecked()
@@ -413,6 +417,7 @@ class SettingsDialog(QDialog):
         s.focus_quality = self.focus_quality.currentData()
         s.protocol = self.protocol.currentData()
         s.hwdec = self.hwdec.currentData()
+        s.cpu_decode_large = self.cpu_large.isChecked()
         s.low_latency = self.low_latency.isChecked()
         s.grid_audio = self.grid_audio.isChecked()
         s.fill_tiles = self.fill.isChecked()

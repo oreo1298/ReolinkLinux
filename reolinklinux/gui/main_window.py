@@ -571,9 +571,12 @@ class MainWindow(QMainWindow):
         menu.addAction("Reconnect", lambda: self.wall.reload(source))
         e = self.cameras.entry(source.cam_id)
         if e and not e.cfg.demo:
-            soft = menu.addAction("Software decoding (fixes coloured dots or lines)")
+            auto = not e.cfg.software_decode and self.cameras.decode_on_cpu(source.cam_id, source.channel)
+            soft = menu.addAction("Software decoding (automatic: larger than 4K)" if auto
+                                  else "Software decoding (fixes coloured dots or lines)")
             soft.setCheckable(True)
-            soft.setChecked(e.cfg.software_decode)
+            soft.setChecked(e.cfg.software_decode or auto)
+            soft.setEnabled(not auto)
             soft.toggled.connect(lambda on, cid=source.cam_id: self._set_software_decode(cid, on))
         menu.addAction("Recordings on the camera…", lambda: (self.select_view(source.cam_id, source.channel),
                                                              self.show_page(1)))

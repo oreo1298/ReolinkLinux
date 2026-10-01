@@ -17,11 +17,14 @@ from PySide6.QtGui import QColor, QFont, QOpenGLContext, QPainter, QPainterPath,
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QFrame, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
 
+from ..core.models import GPU_DECODE_MAX
 from . import icons, mpv
 from .theme import theme
 from .widgets import human_duration
 
 MAX_ZOOM = 8.0
+
+gl_description = ""  # "vendor · renderer · version" of the OpenGL context (for diagnostics)
 
 
 class VideoWidget(QOpenGLWidget):
@@ -42,9 +45,14 @@ class VideoWidget(QOpenGLWidget):
     _frame_ready = Signal()
     _wakeup = Signal()
 
-    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True):
+    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True,
+                 cpu_for_large: bool = True):
         super().__init__(parent)
         self.live = live
+        self.cpu_for_large = cpu_for_large
+        self.large_on_cpu = False      # the current stream is larger than 4K and decoded on the CPU
+        self.decode_errors = 0         # damaged frames reported by the decoder since play()
+        self._hwdec = "no"
         self.setUpdateBehavior(QOpenGLWidget.NoPartialUpdate)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(QSize(80, 45))
@@ -97,17 +105,39 @@ class VideoWidget(QOpenGLWidget):
             self.player = None
             self._last_error = str(exc)
             return
-        # Older mpv releases lack some hwdec values: fall back to the nearest one they know.
-        fallbacks = {"auto-copy-safe": ["auto-copy-safe", "auto-copy"], "auto-safe": ["auto-safe", "auto"]}
-        for value in fallbacks.get(hwdec, [hwdec]) + ["no"]:
-            if value and self.player.set("hwdec", value):
-                break
+        self.set_hwdec(hwdec)
+        # Pick the decoder for each stream once its size is known, before the decoder starts.
+        self.player.hook_add("on_preloaded")
         self.player.request_log_messages("error")
         for name, fmt in (("dwidth", mpv.FORMAT_INT64), ("dheight", mpv.FORMAT_INT64),
                           ("time-pos", mpv.FORMAT_DOUBLE), ("duration", mpv.FORMAT_DOUBLE),
                           ("pause", mpv.FORMAT_FLAG)):
             self.player.observe(name, fmt)
         self.player.set_wakeup_callback(self._wakeup.emit)
+
+    def set_hwdec(self, hwdec: str) -> None:
+        """Video decoder for the next stream: an mpv ``hwdec`` value, "no" for the CPU."""
+        if not self.player:
+            return
+        # Older mpv releases lack some hwdec values: fall back to the nearest one they know.
+        fallbacks = {"auto-copy-safe": ["auto-copy-safe", "auto-copy"], "auto-safe": ["auto-safe", "auto"]}
+        for value in fallbacks.get(hwdec, [hwdec]) + ["no"]:
+            if value and self.player.set("hwdec", value):
+                self._hwdec = value
+                break
+
+    def _on_preloaded(self, hook_id: int) -> None:
+        """mpv opened a stream and waits for us before it starts the decoders."""
+        player = self.player
+        if not player:
+            return
+        try:
+            w, h = _video_track_size(player)
+            self.large_on_cpu = self.cpu_for_large and self._hwdec != "no" and (w > GPU_DECODE_MAX[0]
+                                                                               or h > GPU_DECODE_MAX[1])
+            player.set("hwdec", "no" if self.large_on_cpu else self._hwdec)
+        finally:
+            player.hook_continue(hook_id)
 
     @property
     def available(self) -> bool:
@@ -121,6 +151,8 @@ class VideoWidget(QOpenGLWidget):
         if not self.player or self._render:
             return
         ctx = QOpenGLContext.currentContext()
+        global gl_description
+        gl_description = gl_description or _describe_gl(ctx)
         # mpv probes texture formats by checking glGetError(); a stale error left in the
         # context by Qt would make it reject formats and draw nothing.
         _clear_gl_errors(ctx)
@@ -175,6 +207,7 @@ class VideoWidget(QOpenGLWidget):
         self._start = start
         self._last_error = ""
         self._has_frame = False
+        self.decode_errors = 0
         if not self.player:
             self.failed.emit(self._last_error or mpv.load_error() or "libmpv is not available")
             return
@@ -246,8 +279,12 @@ class VideoWidget(QOpenGLWidget):
                     self.pause_changed.emit(bool(value))
             elif event_id == mpv.EVENT_LOG_MESSAGE and payload:
                 prefix, level, text = payload
-                if text and level in ("error", "fatal"):
+                if prefix == "ffmpeg/video":
+                    self.decode_errors += 1   # damaged data in the stream, not a reason it failed
+                elif text and level in ("error", "fatal"):
                     self._last_error = _clean_error(text)
+            elif event_id == mpv.EVENT_HOOK and payload:
+                self._on_preloaded(payload[1])
             elif event_id == mpv.EVENT_PLAYBACK_RESTART:
                 if not self._has_frame:
                     self._has_frame = True
@@ -327,6 +364,7 @@ class VideoWidget(QOpenGLWidget):
             "width": self.video_w, "height": self.video_h,
             "bitrate": p.get_double("video-bitrate") or 0.0,
             "dropped": p.get_int("decoder-frame-drop-count") or 0,
+            "errors": self.decode_errors, "large_on_cpu": self.large_on_cpu,
         }
         return out
 
@@ -448,6 +486,21 @@ def _use_simple_renderer(ctx) -> bool:
     except Exception:  # noqa: BLE001 - never fail playback because of the probe
         return False
     return any(name in renderer for name in _SOFTWARE_GL)
+
+
+def _describe_gl(ctx) -> str:
+    try:
+        f = ctx.functions()
+        return " · ".join(str(f.glGetString(name) or "?") for name in (0x1F00, 0x1F01, 0x1F02))
+    except Exception:  # noqa: BLE001 - only informational
+        return ""
+
+
+def _video_track_size(player: mpv.Mpv) -> tuple[int, int]:
+    for i in range(player.get_int("track-list/count") or 0):
+        if player.get_string(f"track-list/{i}/type") == "video":
+            return player.get_int(f"track-list/{i}/demux-w") or 0, player.get_int(f"track-list/{i}/demux-h") or 0
+    return 0, 0
 
 
 def _clear_gl_errors(ctx) -> None:
@@ -627,13 +680,14 @@ class VideoTile(QFrame):
 
     retry_requested = Signal()
 
-    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True):
+    def __init__(self, parent=None, live: bool = True, hwdec: str = "auto-copy-safe", low_latency: bool = True,
+                 cpu_for_large: bool = True):
         super().__init__(parent)
         self.setObjectName("Tile")
         self.setMinimumSize(160, 90)
         lay = QStackedLayout(self)
         lay.setStackingMode(QStackedLayout.StackAll)
-        self.video = VideoWidget(self, live=live, hwdec=hwdec, low_latency=low_latency)
+        self.video = VideoWidget(self, live=live, hwdec=hwdec, low_latency=low_latency, cpu_for_large=cpu_for_large)
         self.overlay = _Overlay(self)
         self.retry = QPushButton("Retry")
         self.retry.setCursor(Qt.PointingHandCursor)

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import webbrowser
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -797,7 +799,7 @@ class ControlPanel(QWidget):
 
     def _diagnostics(self) -> None:
         from ..core import diagnose
-        from . import mpv
+        from . import mpv, video
         from .dialogs import DiagnosticsDialog
         e = self.cameras.entry(self.cam_id) if self.cam_id else None
         if not e or not e.online:
@@ -809,8 +811,12 @@ class ControlPanel(QWidget):
         except OSError:
             mpv_line = "libmpv missing"
         s = self.cameras.config.settings
+        session = os.environ.get("XDG_SESSION_TYPE") or ("wayland" if os.environ.get("WAYLAND_DISPLAY") else "?")
         extra = [f"{mpv_line}; hwdec setting {s.hwdec}; protocol {s.protocol}; low latency {s.low_latency}; "
-                 f"software decoding for this camera: {e.cfg.software_decode}"]
+                 f"software decoding for this camera: {e.cfg.software_decode}; "
+                 f"larger than 4K on the CPU: {s.cpu_decode_large}",
+                 f"display {QGuiApplication.platformName()} (session {session}); "
+                 f"OpenGL {video.gl_description or 'not started yet'}"]
         local = []
         for key, tile in self.wall.tiles.items():
             if not key.startswith(f"{self.cam_id}/"):
@@ -820,8 +826,9 @@ class ControlPanel(QWidget):
             local.append(f"[{'tele' if tile.source.lens else 'wide'} {self.wall.tile_quality.get(key, '?')}] "
                          f"{'playing' if v.has_frame else 'no picture'}: {diagnose.redact(v.current_url())}")
             if st:
-                local.append(f"    {st['width']}x{st['height']} {st['codec']}, decoder {st['hwdec']}, "
-                             f"{st['fps']:.1f} fps, dropped {st['dropped']}")
+                decoder = st["hwdec"] + (" (larger than 4K: CPU)" if st["large_on_cpu"] else "")
+                local.append(f"    {st['width']}x{st['height']} {st['codec']}, decoder {decoder}, "
+                             f"{st['fps']:.1f} fps, dropped {st['dropped']}, damaged frames {st['errors']}")
             if v.error or tile.overlay.status:
                 local.append(f"    last error: {diagnose.redact(v.error or tile.overlay.status)}")
         DiagnosticsDialog(self, self.cameras.label(self.cam_id, self.ch_index),

@@ -36,6 +36,7 @@ EVENT_VIDEO_RECONFIG = 17
 EVENT_SEEK = 20
 EVENT_PLAYBACK_RESTART = 21
 EVENT_PROPERTY_CHANGE = 22
+EVENT_HOOK = 25
 
 END_FILE_EOF = 0
 END_FILE_STOP = 2
@@ -67,6 +68,10 @@ class EventEndFile(Structure):
 
 class EventLogMessage(Structure):
     _fields_ = [("prefix", c_char_p), ("level", c_char_p), ("text", c_char_p), ("log_level", c_int)]
+
+
+class EventHook(Structure):
+    _fields_ = [("name", c_char_p), ("id", c_uint64)]
 
 
 class RenderParam(Structure):
@@ -143,6 +148,9 @@ def library():
     lib.mpv_wait_event.restype = POINTER(Event)
     lib.mpv_wait_event.argtypes = [c_void_p, c_double]
     lib.mpv_set_wakeup_callback.argtypes = [c_void_p, c_void_p, c_void_p]
+    if hasattr(lib, "mpv_hook_add"):  # client API 1.101 (mpv 0.30)
+        lib.mpv_hook_add.argtypes = [c_void_p, c_uint64, c_char_p, c_int]
+        lib.mpv_hook_continue.argtypes = [c_void_p, c_uint64]
     lib.mpv_render_context_create.argtypes = [POINTER(c_void_p), c_void_p, POINTER(RenderParam)]
     lib.mpv_render_context_set_update_callback.argtypes = [c_void_p, c_void_p, c_void_p]
     lib.mpv_render_context_update.restype = c_uint64
@@ -300,6 +308,16 @@ class Mpv:
         if self.handle:
             self._lib.mpv_request_log_messages(self.handle, _b(level))
 
+    def hook_add(self, name: str, priority: int = 0) -> bool:
+        """Pause the player at hook ``name`` until ``hook_continue`` (see EVENT_HOOK)."""
+        if not self.handle or not hasattr(self._lib, "mpv_hook_add"):
+            return False
+        return self._lib.mpv_hook_add(self.handle, 0, _b(name), priority) >= 0
+
+    def hook_continue(self, hook_id: int) -> None:
+        if self.handle:
+            self._lib.mpv_hook_continue(self.handle, hook_id)
+
     # -- events
     def set_wakeup_callback(self, fn) -> None:
         """``fn()`` is called from an mpv thread whenever events are pending."""
@@ -319,6 +337,9 @@ class Mpv:
             elif ev.event_id == EVENT_END_FILE and ev.data:
                 end = ctypes.cast(ev.data, POINTER(EventEndFile)).contents
                 payload = (end.reason, end.error)
+            elif ev.event_id == EVENT_HOOK and ev.data:
+                hook = ctypes.cast(ev.data, POINTER(EventHook)).contents
+                payload = ((hook.name or b"").decode(), hook.id)
             elif ev.event_id == EVENT_LOG_MESSAGE and ev.data:
                 msg = ctypes.cast(ev.data, POINTER(EventLogMessage)).contents
                 payload = ((msg.prefix or b"").decode(errors="replace"),

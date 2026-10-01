@@ -10,7 +10,7 @@
 # To update later: `git pull` then `makepkg -sif`.
 
 pkgname=reolinklinux
-pkgver=1.0.1
+pkgver=1.0.2
 pkgrel=1
 pkgdesc="Modern client for Reolink PoE cameras and NVRs: full-quality live view, PTZ, playback, recording"
 arch=('any')

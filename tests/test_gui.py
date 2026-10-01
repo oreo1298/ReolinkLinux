@@ -80,3 +80,22 @@ def test_demo_device_flow():
     assert dt.date.today().day in days
     dev.save_preset(0, 9, "New")
     assert ch.presets[-1].name == "New"
+
+
+def test_cameras_larger_than_4k_decode_on_cpu(qapp, tmp_path):
+    from reolinklinux.core.config import CameraConfig, Config
+    from reolinklinux.core.demo import DemoDevice
+    from reolinklinux.gui.manager import CameraManager
+    cfg = Config(tmp_path / "c.json")
+    cfg.cameras = [CameraConfig(id="duo", host="d"), CameraConfig(id="tm", host="t")]
+    mgr = CameraManager(cfg)
+    for cam_id, kind in (("duo", "duo2"), ("tm", "trackmix")):
+        dev = DemoDevice(kind)
+        dev.connect()
+        mgr.entries[cam_id].device, mgr.entries[cam_id].status = dev, "online"
+    assert mgr.decode_on_cpu("duo", 0)          # 4608×1728 panorama
+    assert not mgr.decode_on_cpu("tm", 0)       # 3840×2160
+    cfg.settings.cpu_decode_large = False
+    assert not mgr.decode_on_cpu("duo", 0)
+    mgr.entries["tm"].cfg.software_decode = True
+    assert mgr.decode_on_cpu("tm", 0)

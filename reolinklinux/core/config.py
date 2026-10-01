@@ -72,6 +72,7 @@ class Settings:
     focus_quality: str = "main"        # stream shown when one camera is enlarged
     protocol: str = "rtsp"             # rtsp | flv
     hwdec: str = "auto-copy-safe"      # mpv --hwdec (copy-back: robust on every GPU setup)
+    cpu_decode_large: bool = True      # decode cameras larger than 4K (Duo 2, 12 MP) on the CPU
     low_latency: bool = True
     grid_audio: bool = False           # play audio in the grid (otherwise only when enlarged)
     fill_tiles: bool = False           # crop video to fill tiles instead of letterboxing
